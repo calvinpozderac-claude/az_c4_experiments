@@ -6,6 +6,10 @@ from typing import List
 class NetworkConfig:
     num_res_blocks: int = 3   # 3 blocks: sufficient for C4 (6×7 board), 30% faster than 5
     num_channels: int = 64
+    # Normalisation layer: "batch" (BatchNorm2d) or "layer" (LayerNorm).
+    # DirectML (AMD GPU on Windows) does not support BatchNorm2d — use "layer" there.
+    # train.py sets this automatically when DirectML is detected.
+    norm_type: str = "batch"
 
 
 @dataclass

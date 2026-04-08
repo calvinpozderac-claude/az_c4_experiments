@@ -26,6 +26,7 @@ class SelfPlayTrainer:
         self.network = AlphaZeroNet(
             num_res_blocks=config.network.num_res_blocks,
             num_channels=config.network.num_channels,
+            norm_type=config.network.norm_type,
         ).to(device)
 
         self.optimizer = Adam(
