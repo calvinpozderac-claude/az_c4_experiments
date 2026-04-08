@@ -34,6 +34,8 @@ def parse_args():
                    help="Override self-play games per iteration")
     p.add_argument("--resume", type=str, default=None,
                    help="Path to checkpoint to resume from")
+    p.add_argument("--eval-interval", type=int, default=None,
+                   help="Evaluate every N iterations (overrides config; 1 = every iteration)")
     p.add_argument("--eval-only", action="store_true",
                    help="Run one evaluation pass then exit (requires --resume)")
     p.add_argument("--mcts-eval", action="store_true",
@@ -102,6 +104,8 @@ def main():
         config.mcts.num_simulations = args.sims
     if args.games is not None:
         config.training.num_self_play_games = args.games
+    if args.eval_interval is not None:
+        config.training.eval_interval = args.eval_interval
 
     device = get_device()
     eval_data = load_eval_data(config)
