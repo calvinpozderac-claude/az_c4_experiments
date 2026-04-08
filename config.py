@@ -24,11 +24,13 @@ class MCTSConfig:
 @dataclass
 class TrainingConfig:
     batch_size: int = 256
-    learning_rate: float = 0.0005   # ↓ from 0.001: more stable value head convergence
+    learning_rate: float = 0.001    # Restored; cosine scheduler decays it to lr_min
+    lr_min: float = 1e-5            # Floor for cosine annealing
     weight_decay: float = 1e-4
+    value_loss_weight: float = 2.0  # Upweight value head (policy logits dominate otherwise)
     replay_buffer_size: int = 100_000
     num_self_play_games: int = 30   # ↑ from 20: less noisy value targets
-    num_epochs: int = 20            # ↑ from 10: make better use of each batch
+    num_epochs: int = 200           # ↑ from 20: primary fix — training was using <0.1% of wall time
     num_iterations: int = 100
     checkpoint_dir: str = "checkpoints"
     checkpoint_interval: int = 5    # Save every N iterations

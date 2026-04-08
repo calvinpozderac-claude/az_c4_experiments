@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.optim import Adam
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 from typing import Dict, List, Optional, Tuple
 
@@ -44,6 +45,13 @@ class SelfPlayTrainer:
                 lr=config.training.learning_rate,
                 weight_decay=config.training.weight_decay,
             )
+
+        # Cosine annealing: LR decays from learning_rate → lr_min over num_iterations
+        self.scheduler = CosineAnnealingLR(
+            self.optimizer,
+            T_max=max(config.training.num_iterations, 1),
+            eta_min=config.training.lr_min,
+        )
 
         self.replay_buffer = ReplayBuffer(max_size=config.training.replay_buffer_size)
 
@@ -149,10 +157,10 @@ class SelfPlayTrainer:
             log_probs = F.log_softmax(policy_logits, dim=-1)
             p_loss = -(policy_t * log_probs).sum(dim=-1).mean()
 
-            # MSE value loss
+            # MSE value loss, upweighted so value gradients aren't drowned by policy
             v_loss = F.mse_loss(value_pred, value_t)
 
-            loss = p_loss + v_loss
+            loss = p_loss + cfg.value_loss_weight * v_loss
             self.optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
@@ -185,6 +193,10 @@ class SelfPlayTrainer:
         losses = self.train_step()
         t_tr = time.time() - t0
 
+        # Decay LR after each iteration
+        self.scheduler.step()
+        current_lr = self.scheduler.get_last_lr()[0]
+
         loss_str = (
             f"policy={losses['policy_loss']:.4f}, value={losses['value_loss']:.4f}"
             if losses else "buffer not ready"
@@ -192,7 +204,7 @@ class SelfPlayTrainer:
         print(
             f"[Iter {self.iteration:3d}]  "
             f"self-play {t_sp:.1f}s  train {t_tr:.1f}s  "
-            f"buffer {len(self.replay_buffer):,}  {loss_str}"
+            f"lr={current_lr:.2e}  buffer {len(self.replay_buffer):,}  {loss_str}"
         )
         return losses
 
@@ -211,6 +223,7 @@ class SelfPlayTrainer:
                 "iteration": self.iteration,
                 "model_state_dict": self.network.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
+                "scheduler_state_dict": self.scheduler.state_dict(),
                 "buffer_size": len(self.replay_buffer),
             },
             path,
@@ -221,5 +234,7 @@ class SelfPlayTrainer:
         ckpt = torch.load(path, map_location=self.device)
         self.network.load_state_dict(ckpt["model_state_dict"])
         self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if "scheduler_state_dict" in ckpt:
+            self.scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         self.iteration = ckpt["iteration"]
         print(f"Checkpoint loaded: {path} (iteration {self.iteration})")
