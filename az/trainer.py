@@ -7,6 +7,7 @@ from torch.optim import Adam
 from tqdm import tqdm
 from typing import Dict, List, Optional, Tuple
 
+from az.optimizer import DirectMLSafeAdam
 from c4.game import Connect4, COLS
 from az.network import AlphaZeroNet
 from az.mcts import MCTS
@@ -29,12 +30,20 @@ class SelfPlayTrainer:
             norm_type=config.network.norm_type,
         ).to(device)
 
-        self.optimizer = Adam(
-            self.network.parameters(),
-            lr=config.training.learning_rate,
-            weight_decay=config.training.weight_decay,
-            foreach=config.training.adam_foreach,
-        )
+        if config.training.adam_foreach:
+            # Standard Adam (CUDA / CPU)
+            self.optimizer = Adam(
+                self.network.parameters(),
+                lr=config.training.learning_rate,
+                weight_decay=config.training.weight_decay,
+            )
+        else:
+            # DirectML: use lerp_-free Adam (aten::lerp.Scalar_out unsupported)
+            self.optimizer = DirectMLSafeAdam(
+                self.network.parameters(),
+                lr=config.training.learning_rate,
+                weight_decay=config.training.weight_decay,
+            )
 
         self.replay_buffer = ReplayBuffer(max_size=config.training.replay_buffer_size)
 
