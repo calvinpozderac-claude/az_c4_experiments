@@ -33,6 +33,7 @@ class SelfPlayTrainer:
             self.network.parameters(),
             lr=config.training.learning_rate,
             weight_decay=config.training.weight_decay,
+            foreach=config.training.adam_foreach,
         )
 
         self.replay_buffer = ReplayBuffer(max_size=config.training.replay_buffer_size)

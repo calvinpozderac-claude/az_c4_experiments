@@ -33,6 +33,9 @@ class TrainingConfig:
     checkpoint_dir: str = "checkpoints"
     checkpoint_interval: int = 5    # Save every N iterations
     eval_interval: int = 5          # Evaluate every N iterations
+    # Adam foreach mode uses _foreach_lerp_ which DirectML doesn't support.
+    # train.py sets this to False automatically when DirectML is detected.
+    adam_foreach: bool = True
 
 
 @dataclass
