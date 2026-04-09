@@ -19,6 +19,10 @@ class MCTSConfig:
     dirichlet_alpha: float = 0.3    # Dirichlet noise alpha (root exploration)
     dirichlet_epsilon: float = 0.25 # Fraction of prior replaced by noise
     temp_threshold: int = 20        # Moves before switching to greedy (↑ from 15: more exploratory games)
+    # Tree reuse across self-play games within an iteration.
+    # All games start from the same empty board, so the retained root is valid.
+    tree_reuse_weight: float = 1.0      # Scale N/W of retained nodes by this factor (1.0 = keep as-is)
+    tree_reuse_c_puct_bonus: float = 0.5  # Extra c_puct when reusing (drives exploration of less-visited nodes)
 
 
 @dataclass

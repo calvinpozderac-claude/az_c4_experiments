@@ -75,6 +75,10 @@ class SelfPlayTrainer:
 
         Returns a list of (canonical_board, mcts_policy, outcome) triples,
         where outcome is from the current player's perspective at that step.
+
+        Tree reuse: MCTS maintains a batch-wide tree rooted at the empty board.
+        Each game adds simulations to the relevant subtree.  descend() is called
+        after every move so the tree pointer stays in sync with the board state.
         """
         game = Connect4()
         # Store (board, policy, player_who_moved) then assign outcomes at the end
@@ -90,6 +94,7 @@ class SelfPlayTrainer:
                 add_dirichlet=True,
                 dirichlet_alpha=self.config.mcts.dirichlet_alpha,
                 dirichlet_epsilon=self.config.mcts.dirichlet_epsilon,
+                c_puct_bonus=self.config.mcts.tree_reuse_c_puct_bonus,
             )
 
             board = game.get_canonical_board()
@@ -105,6 +110,8 @@ class SelfPlayTrainer:
                 action = int(np.random.choice(valid_moves, p=probs))
 
             game.make_move(action)
+            # Advance the retained tree pointer to the child just played.
+            self.mcts.descend(action)
 
         # Assign game outcome to each position
         outcome = game.winner  # 1, -1, or 0
@@ -121,9 +128,20 @@ class SelfPlayTrainer:
         return training_data
 
     def run_self_play(self, num_games: int):
-        """Generate `num_games` self-play games and store in the replay buffer."""
+        """
+        Generate `num_games` self-play games and store in the replay buffer.
+
+        The MCTS tree is cleared before each iteration so stale priors from the
+        previous network checkpoint don't persist.  Within the iteration, the
+        tree accumulates across games: each game starts from the same empty-board
+        root and adds `num_simulations` more sims to it.  Later games in the
+        batch therefore benefit from the exploration done by earlier games.
+        """
         self.network.eval()
+        self.mcts.clear_retained_root()
         for _ in tqdm(range(num_games), desc="Self-play", leave=False):
+            # Reset tree pointer to the batch root (with optional stat scaling).
+            self.mcts.reset_to_game_root(self.config.mcts.tree_reuse_weight)
             game_data = self.self_play_game()
             self.replay_buffer.add_game(game_data)
 

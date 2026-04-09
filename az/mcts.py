@@ -11,6 +11,24 @@ current_player is the opponent of the parent's current_player).
 
 Backup propagates the value up the tree, negating at each level to
 convert between the two players' perspectives.
+
+Persistent tree reuse
+---------------------
+MCTS maintains two internal pointers:
+
+  _batch_root     – the root node for the entire self-play batch (the empty
+                    board state).  Persists across games within one iteration.
+                    Cleared by clear_retained_root() between iterations.
+
+  _current_node   – tracks the node corresponding to the *current game state*
+                    within the batch root's tree.
+
+At the start of each game call reset_to_game_root(weight).  After every move
+call descend(action) so the tree pointer stays aligned with the board.
+
+All MCTS simulations are then added *on top of* the existing subtree for the
+current position rather than starting from zero, and c_puct_bonus increases
+exploration to avoid re-visiting already well-sampled branches.
 """
 
 import math
@@ -62,7 +80,19 @@ class MCTSNode:
 
 
 class MCTS:
-    """AlphaZero MCTS."""
+    """
+    AlphaZero MCTS with persistent tree reuse across self-play games.
+
+    Tree lifetime
+    -------------
+    - clear_retained_root()      : discard everything (call before each iteration)
+    - reset_to_game_root(weight) : navigate back to empty-board root, optionally
+                                   discount stats by weight (call at game start)
+    - descend(action)            : advance the tree pointer by one move (call
+                                   after every game.make_move())
+    - run(...)                   : run simulations from the current tracked node
+                                   (or from a fresh root if none is tracked)
+    """
 
     def __init__(
         self,
@@ -76,6 +106,45 @@ class MCTS:
         self.c_puct = c_puct
         self.num_simulations = num_simulations
 
+        # Batch-level root (the empty-board node for the whole self-play batch)
+        self._batch_root: Optional[MCTSNode] = None
+        # Current position pointer within the batch tree
+        self._current_node: Optional[MCTSNode] = None
+
+    # ------------------------------------------------------------------
+    # Tree lifetime management
+    # ------------------------------------------------------------------
+
+    def clear_retained_root(self):
+        """Discard the retained tree entirely (call between training iterations)."""
+        self._batch_root = None
+        self._current_node = None
+
+    def reset_to_game_root(self, tree_reuse_weight: float = 1.0):
+        """
+        Call at the start of each self-play game.
+
+        Scales the batch root's subtree stats by tree_reuse_weight (useful to
+        discount old experience; 1.0 keeps everything unchanged), then resets
+        the current-node pointer back to the batch root so the new game starts
+        from the beginning of the tree.
+        """
+        if self._batch_root is not None:
+            self._scale_tree(self._batch_root, tree_reuse_weight)
+        self._current_node = self._batch_root  # None for the very first game
+
+    def descend(self, action: int):
+        """
+        Advance the current-node pointer to the child reached by `action`.
+
+        Call after every game.make_move() to keep the tree pointer in sync
+        with the actual board state.  If the child hasn't been expanded yet
+        (the game took a path MCTS barely visited), the pointer becomes None
+        and the next run() call starts a fresh sub-tree from that position.
+        """
+        if self._current_node is not None:
+            self._current_node = self._current_node.children.get(action)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -87,40 +156,70 @@ class MCTS:
         add_dirichlet: bool = True,
         dirichlet_alpha: float = 0.3,
         dirichlet_epsilon: float = 0.25,
+        c_puct_bonus: float = 0.0,
     ) -> Tuple[np.ndarray, float]:
         """
         Run MCTS from root_state.
 
+        If a current node is being tracked (via reset_to_game_root /
+        descend) it is used as the root and `num_simulations` additional
+        simulations are added on top.  Otherwise a fresh root is created.
+
+        c_puct_bonus is added to self.c_puct for this call, which increases
+        the U term in PUCT and pushes exploration toward less-visited nodes.
+
         Returns
         -------
         action_probs : np.ndarray of shape (COLS,)
-            Visit-count-based action distribution (sums to 1 over valid moves).
-        root_value : float
-            Value estimate from root's current_player's perspective.
+        root_value   : float
         """
         if root_state.game_over:
             return np.zeros(COLS, dtype=np.float32), 0.0
 
-        root = MCTSNode(root_state.clone())
+        effective_c_puct = self.c_puct + c_puct_bonus
 
-        # First expansion (counts as one simulation)
-        init_value = self._expand(root)
-        self._backup(root, init_value)
+        if self._current_node is not None and not self._current_node.is_terminal:
+            # --- Warm-start: reuse the accumulated sub-tree -----------------
+            root = self._current_node
+            # Do NOT detach root from its parent: backups should propagate all
+            # the way up to the batch root so ancestor Q values stay accurate.
 
-        # Optional Dirichlet noise on root children for exploration during self-play
-        if add_dirichlet and root.children:
-            self._add_dirichlet_noise(root, dirichlet_alpha, dirichlet_epsilon)
+            # Re-sample Dirichlet so fresh games don't replay prior noise.
+            if add_dirichlet and root.children:
+                self._add_dirichlet_noise(root, dirichlet_alpha, dirichlet_epsilon)
 
-        # Remaining simulations
-        for _ in range(self.num_simulations - 1):
-            node = root
-            # Selection: walk to a leaf
-            while node.is_expanded and not node.is_terminal:
-                node = self._select_child(node)
-            # Evaluation
-            value = node.terminal_value if node.is_terminal else self._expand(node)
-            # Backup
-            self._backup(node, value)
+            # All simulations are *additive* on top of existing visit counts.
+            for _ in range(self.num_simulations):
+                node = root
+                while node.is_expanded and not node.is_terminal:
+                    node = self._select_child(node, effective_c_puct)
+                value = node.terminal_value if node.is_terminal else self._expand(node)
+                self._backup(node, value)
+
+        else:
+            # --- Cold-start: build a fresh tree from root_state -------------
+            root = MCTSNode(root_state.clone())
+
+            init_value = self._expand(root)
+            self._backup(root, init_value)
+
+            if add_dirichlet and root.children:
+                self._add_dirichlet_noise(root, dirichlet_alpha, dirichlet_epsilon)
+
+            for _ in range(self.num_simulations - 1):
+                node = root
+                while node.is_expanded and not node.is_terminal:
+                    node = self._select_child(node, effective_c_puct)
+                value = node.terminal_value if node.is_terminal else self._expand(node)
+                self._backup(node, value)
+
+            # First run in this batch: pin the batch root.
+            if self._batch_root is None:
+                self._batch_root = root
+
+        # Keep the current-node pointer pointing at this root so that
+        # descend() can navigate to the chosen child after the move.
+        self._current_node = root
 
         # Build action probability vector from visit counts
         visit_counts = np.array(
@@ -140,8 +239,16 @@ class MCTS:
         return action_probs, root.Q
 
     def get_best_move(self, state: Connect4) -> int:
-        """Greedy best move (temperature=0, no noise)."""
+        """Greedy best move (temperature=0, no noise, no tree reuse)."""
+        # Save and restore the retained-tree state so evaluation calls don't
+        # corrupt the self-play batch root or current-node pointer.
+        saved_batch = self._batch_root
+        saved_current = self._current_node
+        self._batch_root = None
+        self._current_node = None
         action_probs, _ = self.run(state, temperature=0, add_dirichlet=False)
+        self._batch_root = saved_batch
+        self._current_node = saved_current
         valid = state.get_valid_moves()
         return max(valid, key=lambda m: action_probs[m])
 
@@ -149,7 +256,23 @@ class MCTS:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _select_child(self, node: MCTSNode) -> MCTSNode:
+    def _scale_tree(self, node: MCTSNode, weight: float):
+        """
+        Recursively scale N and W statistics by weight.
+
+        weight=1.0 is a no-op (fast early return).
+        weight<1.0 discounts old experience so the new iteration's simulations
+        carry more relative weight in the PUCT formula.
+        """
+        if weight == 1.0:
+            return
+        node.N = int(node.N * weight)
+        node.W = node.W * weight
+        node.Q = node.W / node.N if node.N > 0 else 0.0
+        for child in node.children.values():
+            self._scale_tree(child, weight)
+
+    def _select_child(self, node: MCTSNode, c_puct: float) -> MCTSNode:
         """
         PUCT selection from node's perspective.
 
@@ -162,7 +285,7 @@ class MCTS:
 
         for child in node.children.values():
             q = -child.Q  # flip to parent's perspective
-            u = self.c_puct * child.prior * sqrt_N / (1 + child.N)
+            u = c_puct * child.prior * sqrt_N / (1 + child.N)
             score = q + u
             if score > best_score:
                 best_score = score
