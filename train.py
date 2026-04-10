@@ -17,7 +17,7 @@ import argparse
 import os
 
 from config import Config, DEFAULT_CONFIG
-from device import get_device
+from device import get_device, is_directml
 from az.trainer import SelfPlayTrainer
 from az.mcts import MCTS
 from eval.preprocess import preprocess_all, load_preprocessed
@@ -108,6 +108,11 @@ def main():
         config.training.eval_interval = args.eval_interval
 
     device = get_device()
+    # Two ops are broken on DirectML; fix both automatically.
+    if is_directml():
+        config.network.norm_type = "layer"       # BatchNorm2d unsupported
+        config.training.adam_foreach = False     # _foreach_lerp_ unsupported
+
     eval_data = load_eval_data(config)
     trainer = SelfPlayTrainer(config, device)
 
