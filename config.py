@@ -38,6 +38,14 @@ class TrainingConfig:
     # Adam foreach mode uses _foreach_lerp_ which DirectML doesn't support.
     # train.py sets this to False automatically when DirectML is detected.
     adam_foreach: bool = True
+    # Endgame buffer: a deduplicated rolling buffer of near-terminal positions.
+    # Positions from the last `endgame_lookback` moves of each game are added
+    # (unique boards only).  During training, `endgame_batch_size` extra samples
+    # from this buffer supplement each main batch, giving the network a stronger
+    # signal on positions closest to the ground-truth outcome.
+    endgame_buffer_size: int = 10_000  # unique positions stored
+    endgame_lookback: int = 10         # last N moves per game added to buffer
+    endgame_batch_size: int = 64       # supplement per training step (0 = disabled)
 
 
 @dataclass

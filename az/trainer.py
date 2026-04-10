@@ -13,6 +13,7 @@ from c4.game import Connect4, COLS
 from az.network import AlphaZeroNet
 from az.mcts import MCTS
 from az.replay_buffer import ReplayBuffer
+from az.endgame_buffer import EndgameBuffer
 
 
 class SelfPlayTrainer:
@@ -54,6 +55,7 @@ class SelfPlayTrainer:
         )
 
         self.replay_buffer = ReplayBuffer(max_size=config.training.replay_buffer_size)
+        self.endgame_buffer = EndgameBuffer(max_size=config.training.endgame_buffer_size)
 
         self.mcts = MCTS(
             network=self.network,
@@ -121,11 +123,17 @@ class SelfPlayTrainer:
         return training_data
 
     def run_self_play(self, num_games: int):
-        """Generate `num_games` self-play games and store in the replay buffer."""
+        """Generate `num_games` self-play games and store in both replay buffers."""
         self.network.eval()
         for _ in tqdm(range(num_games), desc="Self-play", leave=False):
             game_data = self.self_play_game()
             self.replay_buffer.add_game(game_data)
+            # Add the last `endgame_lookback` positions (near-terminal ground truth)
+            # to the deduplicated endgame buffer.
+            if self.config.training.endgame_batch_size > 0:
+                self.endgame_buffer.add_game(
+                    game_data, self.config.training.endgame_lookback
+                )
 
     # ------------------------------------------------------------------
     # Training
@@ -146,6 +154,13 @@ class SelfPlayTrainer:
 
         for _ in range(cfg.num_epochs):
             boards, policies, values = self.replay_buffer.sample(cfg.batch_size)
+
+            # Supplement with endgame positions when the buffer is ready.
+            if cfg.endgame_batch_size > 0 and self.endgame_buffer.is_ready(cfg.endgame_batch_size):
+                eg_b, eg_p, eg_v = self.endgame_buffer.sample(cfg.endgame_batch_size)
+                boards   = np.concatenate([boards,    eg_b], axis=0)
+                policies = np.concatenate([policies,  eg_p], axis=0)
+                values   = np.concatenate([values,    eg_v], axis=0)
 
             board_t = torch.from_numpy(boards).to(self.device)
             policy_t = torch.from_numpy(policies).to(self.device)
@@ -204,7 +219,9 @@ class SelfPlayTrainer:
         print(
             f"[Iter {self.iteration:3d}]  "
             f"self-play {t_sp:.1f}s  train {t_tr:.1f}s  "
-            f"lr={current_lr:.2e}  buffer {len(self.replay_buffer):,}  {loss_str}"
+            f"lr={current_lr:.2e}  "
+            f"buf {len(self.replay_buffer):,}  eg {len(self.endgame_buffer):,}  "
+            f"{loss_str}"
         )
         return losses
 
@@ -225,6 +242,7 @@ class SelfPlayTrainer:
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict(),
                 "buffer_size": len(self.replay_buffer),
+                "endgame_buffer_size": len(self.endgame_buffer),
             },
             path,
         )
