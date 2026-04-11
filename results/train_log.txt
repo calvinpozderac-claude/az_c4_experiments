@@ -10,4 +10,78 @@ Starting AlphaZero training
   Total iters     : 25
   Value heads     : 6 (game_outcome, mcts_q, minimax_net_d1, minimax_net_d2, minimax_net_d3, minimax_q_n10)
 
-Self-play:   0%|          | 0/20 [00:00<?, ?it/s]Self-play:   5%|▌         | 1/20 [00:08<02:46,  8.78s/it]Self-play:  10%|█         | 2/20 [00:11<01:29,  4.98s/it]
+Self-play:   0%|          | 0/20 [00:00<?, ?it/s]Self-play:   5%|▌         | 1/20 [00:08<02:46,  8.78s/it]Self-play:  10%|█         | 2/20 [00:11<01:29,  4.98s/it]Self-play:  15%|█▌        | 3/20 [00:21<02:06,  7.42s/it]Self-play:  20%|██        | 4/20 [00:26<01:42,  6.42s/it]Self-play:  25%|██▌       | 5/20 [00:32<01:32,  6.16s/it]Self-play:  30%|███       | 6/20 [00:36<01:18,  5.61s/it]Self-play:  35%|███▌      | 7/20 [00:41<01:11,  5.53s/it]Self-play:  40%|████      | 8/20 [00:45<01:00,  5.06s/it]Self-play:  45%|████▌     | 9/20 [00:49<00:50,  4.59s/it]Self-play:  50%|█████     | 10/20 [00:54<00:48,  4.82s/it]Self-play:  55%|█████▌    | 11/20 [00:58<00:40,  4.49s/it]Self-play:  60%|██████    | 12/20 [01:02<00:33,  4.17s/it]Self-play:  65%|██████▌   | 13/20 [01:07<00:30,  4.41s/it]Self-play:  70%|███████   | 14/20 [01:16<00:35,  5.85s/it]Self-play:  75%|███████▌  | 15/20 [01:18<00:23,  4.71s/it]Self-play:  80%|████████  | 16/20 [01:24<00:20,  5.22s/it]Self-play:  85%|████████▌ | 17/20 [01:27<00:13,  4.48s/it]Self-play:  90%|█████████ | 18/20 [01:29<00:07,  3.78s/it]Self-play:  95%|█████████▌| 19/20 [01:32<00:03,  3.52s/it]Self-play: 100%|██████████| 20/20 [01:35<00:00,  3.30s/it]                                                          [Iter   1]  self-play 95.3s  train 18.5s  lr=9.96e-04  buf 806  eg 192  policy=1.4083  value=0.0328  [gam=0.1274  mcq=0.0116  mn1=0.0082  mn2=0.0144  mn3=0.0180  mqn=0.0175]
+Value eval:   0%|          | 0/12 [00:00<?, ?it/s]Value eval:  33%|███▎      | 4/12 [00:00<00:00, 31.49it/s]Value eval:  67%|██████▋   | 8/12 [00:00<00:00, 32.15it/s]Value eval: 100%|██████████| 12/12 [00:00<00:00, 33.15it/s]                                                           
+============================================
+  Value-head eval (iter 1)
+============================================
+  game_outcome_sign_acc                    0.4468  (44.7%)
+  game_outcome_sign_acc_L1                 0.4897  (49.0%)
+  game_outcome_sign_acc_L2                 0.4745  (47.4%)
+  game_outcome_sign_acc_L3                 0.2630  (26.3%)
+  game_outcome_strong_sign_acc             0.5247  (52.5%)
+  mcts_q_sign_acc                          0.4977  (49.8%)
+  mcts_q_sign_acc_L1                       0.5537  (55.4%)
+  mcts_q_sign_acc_L2                       0.5130  (51.3%)
+  mcts_q_sign_acc_L3                       0.2990  (29.9%)
+  mcts_q_strong_sign_acc                   0.5885  (58.9%)
+  minimax_net_d1_sign_acc                  0.4408  (44.1%)
+  minimax_net_d1_sign_acc_L1               0.4670  (46.7%)
+  minimax_net_d1_sign_acc_L2               0.4635  (46.4%)
+  minimax_net_d1_sign_acc_L3               0.3170  (31.7%)
+  minimax_net_d1_strong_sign_acc           0.5130  (51.3%)
+  minimax_net_d2_sign_acc                  0.5235  (52.3%)
+  minimax_net_d2_sign_acc_L1               0.5990  (59.9%)
+  minimax_net_d2_sign_acc_L2               0.5235  (52.3%)
+  minimax_net_d2_sign_acc_L3               0.2970  (29.7%)
+  minimax_net_d2_strong_sign_acc           0.6245  (62.4%)
+  minimax_net_d3_sign_acc                  0.4840  (48.4%)
+  minimax_net_d3_sign_acc_L1               0.5123  (51.2%)
+  minimax_net_d3_sign_acc_L2               0.5225  (52.2%)
+  minimax_net_d3_sign_acc_L3               0.3220  (32.2%)
+  minimax_net_d3_strong_sign_acc           0.5712  (57.1%)
+  minimax_q_n10_sign_acc                   0.4972  (49.7%)
+  minimax_q_n10_sign_acc_L1                0.5583  (55.8%)
+  minimax_q_n10_sign_acc_L2                0.5040  (50.4%)
+  minimax_q_n10_sign_acc_L3                0.3000  (30.0%)
+  minimax_q_n10_strong_sign_acc            0.5872  (58.7%)
+============================================
+
+Self-play:   0%|          | 0/20 [00:00<?, ?it/s]Self-play:   5%|▌         | 1/20 [00:05<01:53,  5.99s/it]Self-play:  10%|█         | 2/20 [00:09<01:21,  4.52s/it]Self-play:  15%|█▌        | 3/20 [00:15<01:25,  5.03s/it]Self-play:  20%|██        | 4/20 [00:16<00:55,  3.49s/it]Self-play:  25%|██▌       | 5/20 [00:19<00:52,  3.47s/it]Self-play:  30%|███       | 6/20 [00:22<00:45,  3.26s/it]Self-play:  35%|███▌      | 7/20 [00:26<00:45,  3.53s/it]Self-play:  40%|████      | 8/20 [00:28<00:35,  2.94s/it]Self-play:  45%|████▌     | 9/20 [00:32<00:35,  3.26s/it]Self-play:  50%|█████     | 10/20 [00:37<00:37,  3.76s/it]Self-play:  55%|█████▌    | 11/20 [00:41<00:36,  4.06s/it]Self-play:  60%|██████    | 12/20 [00:44<00:29,  3.70s/it]Self-play:  65%|██████▌   | 13/20 [00:48<00:25,  3.71s/it]Self-play:  70%|███████   | 14/20 [00:55<00:28,  4.68s/it]Self-play:  75%|███████▌  | 15/20 [00:57<00:20,  4.04s/it]Self-play:  80%|████████  | 16/20 [01:02<00:16,  4.07s/it]Self-play:  85%|████████▌ | 17/20 [01:07<00:13,  4.36s/it]Self-play:  90%|█████████ | 18/20 [01:08<00:07,  3.57s/it]Self-play:  95%|█████████▌| 19/20 [01:13<00:03,  3.84s/it]Self-play: 100%|██████████| 20/20 [01:17<00:00,  3.97s/it]                                                          [Iter   2]  self-play 77.6s  train 18.1s  lr=9.84e-04  buf 1,484  eg 376  policy=1.3191  value=0.0508  [gam=0.1543  mcq=0.0183  mn1=0.0448  mn2=0.0328  mn3=0.0336  mqn=0.0212]
+Value eval:   0%|          | 0/12 [00:00<?, ?it/s]Value eval:  33%|███▎      | 4/12 [00:00<00:00, 30.59it/s]Value eval:  67%|██████▋   | 8/12 [00:00<00:00, 30.50it/s]Value eval: 100%|██████████| 12/12 [00:00<00:00, 30.82it/s]                                                           
+============================================
+  Value-head eval (iter 2)
+============================================
+  game_outcome_sign_acc                    0.4523  (45.2%)
+  game_outcome_sign_acc_L1                 0.5027  (50.3%)
+  game_outcome_sign_acc_L2                 0.4640  (46.4%)
+  game_outcome_sign_acc_L3                 0.2780  (27.8%)
+  game_outcome_strong_sign_acc             0.5318  (53.2%)
+  mcts_q_sign_acc                          0.5168  (51.7%)
+  mcts_q_sign_acc_L1                       0.5830  (58.3%)
+  mcts_q_sign_acc_L2                       0.5220  (52.2%)
+  mcts_q_sign_acc_L3                       0.3080  (30.8%)
+  mcts_q_strong_sign_acc                   0.6125  (61.3%)
+  minimax_net_d1_sign_acc                  0.4982  (49.8%)
+  minimax_net_d1_sign_acc_L1               0.5627  (56.3%)
+  minimax_net_d1_sign_acc_L2               0.4930  (49.3%)
+  minimax_net_d1_sign_acc_L3               0.3150  (31.5%)
+  minimax_net_d1_strong_sign_acc           0.5855  (58.6%)
+  minimax_net_d2_sign_acc                  0.5105  (51.0%)
+  minimax_net_d2_sign_acc_L1               0.5867  (58.7%)
+  minimax_net_d2_sign_acc_L2               0.5075  (50.7%)
+  minimax_net_d2_sign_acc_L3               0.2880  (28.8%)
+  minimax_net_d2_strong_sign_acc           0.6069  (60.7%)
+  minimax_net_d3_sign_acc                  0.5002  (50.0%)
+  minimax_net_d3_sign_acc_L1               0.5663  (56.6%)
+  minimax_net_d3_sign_acc_L2               0.4930  (49.3%)
+  minimax_net_d3_sign_acc_L3               0.3160  (31.6%)
+  minimax_net_d3_strong_sign_acc           0.5930  (59.3%)
+  minimax_q_n10_sign_acc                   0.5150  (51.5%)
+  minimax_q_n10_sign_acc_L1                0.5853  (58.5%)
+  minimax_q_n10_sign_acc_L2                0.5135  (51.3%)
+  minimax_q_n10_sign_acc_L3                0.3070  (30.7%)
+  minimax_q_n10_strong_sign_acc            0.6129  (61.3%)
+============================================
+
+Self-play:   0%|          | 0/20 [00:00<?, ?it/s]Self-play:   5%|▌         | 1/20 [00:05<01:41,  5.34s/it]Self-play:  10%|█         | 2/20 [00:06<00:55,  3.06s/it]Self-play:  15%|█▌        | 3/20 [00:10<00:58,  3.45s/it]Self-play:  20%|██        | 4/20 [00:15<01:03,  3.99s/it]Self-play:  25%|██▌       | 5/20 [00:23<01:19,  5.31s/it]Self-play:  30%|███       | 6/20 [00:24<00:55,  3.96s/it]Self-play:  35%|███▌      | 7/20 [00:25<00:40,  3.14s/it]Self-play:  40%|████      | 8/20 [00:31<00:46,  3.85s/it]Self-play:  45%|████▌     | 9/20 [00:32<00:33,  3.01s/it]Self-play:  50%|█████     | 10/20 [00:34<00:25,  2.55s/it]Self-play:  55%|█████▌    | 11/20 [00:42<00:38,  4.24s/it]
