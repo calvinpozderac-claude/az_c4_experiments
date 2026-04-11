@@ -50,11 +50,23 @@ def evaluate_value_accuracy(
     """
     Evaluate all value heads against optimal gamesolver scores.
 
+    Ground truth: sign(gamesolver_score) ∈ {-1, 0, +1}, on the same scale
+    as the tanh value head outputs.
+
     For each head, reports:
-      sign_accuracy        overall fraction where sign(pred) == sign(score)
-      sign_accuracy_L{n}   per difficulty level
-      strong_sign_accuracy fraction on positions where |score| > 1
-    Keys are prefixed with the head name, e.g. "game_outcome_sign_accuracy".
+      sign_acc             fraction where sign(pred) == sign(score)   (higher better)
+      sign_acc_L{n}        per difficulty level
+      strong_sign_acc      sign_acc on positions where |score| > 1
+      sign_mse             MSE(pred, sign(score))                     (lower better)
+      sign_mse_L{n}        per difficulty level
+      strong_sign_mse      sign_mse on positions where |score| > 1
+
+    MSE baselines (for reference):
+      always predict  0 : MSE ≈ 0.86  (fraction of non-draw positions)
+      always predict +1 : MSE ≈ 1.49  (penalises losses heavily)
+      perfect predictor : MSE = 0.00
+
+    Keys are prefixed with the head name, e.g. "game_outcome_sign_mse".
     """
     boards = data["boards"]
     scores = data["scores"]
@@ -77,24 +89,33 @@ def evaluate_value_accuracy(
             _, values = network(batch)                      # (batch, 6)
             pred_values[start:end] = values.cpu().numpy()
 
-    true_sign   = np.sign(scores)
+    true_sign   = np.sign(scores).astype(np.float32)   # {-1, 0, +1} ground truth
     strong_mask = np.abs(scores) > 1
     unique_levels = sorted(set(levels.tolist()))
 
     results: Dict[str, float] = {}
     for h, head_name in enumerate(network.VALUE_HEAD_NAMES):
-        pred_sign = np.sign(pred_values[:, h])
-        correct   = pred_sign == true_sign
+        pred       = pred_values[:, h]                     # tanh output in (-1, 1)
+        pred_sign  = np.sign(pred)
+        correct    = pred_sign == true_sign
+        sq_err     = (pred - true_sign) ** 2              # element-wise squared error
 
         prefix = head_name
+        # Sign accuracy
         results[f"{prefix}_sign_acc"]        = float(correct.mean())
         results[f"{prefix}_strong_sign_acc"] = (
             float(correct[strong_mask].mean()) if strong_mask.sum() > 0 else float("nan")
+        )
+        # Sign MSE
+        results[f"{prefix}_sign_mse"]        = float(sq_err.mean())
+        results[f"{prefix}_strong_sign_mse"] = (
+            float(sq_err[strong_mask].mean()) if strong_mask.sum() > 0 else float("nan")
         )
         for lvl in unique_levels:
             mask = levels == lvl
             if mask.sum() > 0:
                 results[f"{prefix}_sign_acc_L{lvl}"] = float(correct[mask].mean())
+                results[f"{prefix}_sign_mse_L{lvl}"] = float(sq_err[mask].mean())
 
     return results
 

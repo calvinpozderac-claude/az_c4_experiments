@@ -137,20 +137,22 @@ def run_evaluation(
 # ---------------------------------------------------------------------------
 
 def print_summary_table(history: list):
-    """Print a compact table: rows=iterations, cols=6 heads (overall sign acc)."""
+    """Print sign-accuracy and sign-MSE tables: rows=iterations, cols=6 heads."""
     if not history:
         return
 
     col_w  = 9
     labels = [HEAD_LABELS[h] for h in HEAD_NAMES]
-    iters  = [r["iteration"] for r in history]
+    sep    = "-" * (6 + col_w * len(HEAD_NAMES) + len(HEAD_NAMES) - 1)
 
+    # ------------------------------------------------------------------
+    # Sign accuracy table (higher is better)
+    # Baselines: "always +1" ≈ 52.4%, "always 0" ≈ 13.9%
+    # ------------------------------------------------------------------
+    print("\n" + "=" * len(sep))
+    print("  SIGN ACCURACY vs GAMESOLVER  (overall)   baseline: always+1 ≈ 52.4%")
+    print("=" * len(sep))
     header = f"{'Iter':>5} " + " ".join(f"{l:>{col_w}}" for l in labels)
-    sep    = "-" * len(header)
-
-    print("\n" + "=" * len(header))
-    print("  SIGN ACCURACY vs GAMESOLVER  (overall, all levels)")
-    print("=" * len(header))
     print(header)
     print(sep)
     for r in history:
@@ -161,52 +163,106 @@ def print_summary_table(history: list):
             for v in vals
         )
         print(row)
-
-    # Best-so-far row
     if len(history) > 1:
         print(sep)
         bests = [
             max(r.get(f"{h}_sign_acc", float("nan")) for r in history)
             for h in HEAD_NAMES
         ]
-        best_row = f"{'BEST':>5} " + " ".join(
+        print(f"{'BEST':>5} " + " ".join(
             f"{v*100:>{col_w}.1f}%" if not np.isnan(v) else f"{'n/a':>{col_w}}"
             for v in bests
-        )
-        print(best_row)
+        ))
+    print("=" * len(sep))
 
-    print("=" * len(header))
-
-    # Per-level table
+    # Per-level sign accuracy
     for lvl in [1, 2, 3]:
         key_suffix = f"_sign_acc_L{lvl}"
-        first_key  = f"{HEAD_NAMES[0]}{key_suffix}"
-        if first_key not in history[0]:
+        if f"{HEAD_NAMES[0]}{key_suffix}" not in history[0]:
             continue
         print(f"\n{'Iter':>5} " + " ".join(f"{l:>{col_w}}" for l in labels) +
-              f"  ← L{lvl}")
+              f"  ← L{lvl} sign acc")
         print(sep)
         for r in history:
             it   = r["iteration"]
             vals = [r.get(f"{h}{key_suffix}", float("nan")) for h in HEAD_NAMES]
-            row  = f"{it:5d} " + " ".join(
+            print(f"{it:5d} " + " ".join(
                 f"{v*100:>{col_w}.1f}%" if not np.isnan(v) else f"{'n/a':>{col_w}}"
+                for v in vals
+            ))
+
+    # ------------------------------------------------------------------
+    # Sign MSE table (lower is better)
+    # Baselines: always predict 0 ≈ 0.861, always predict +1 ≈ 1.487
+    # ------------------------------------------------------------------
+    if f"{HEAD_NAMES[0]}_sign_mse" in history[0]:
+        print("\n" + "=" * len(sep))
+        print("  SIGN MSE  (pred vs sign(score))  lower is better   "
+              "baseline: always0 ≈ 0.861  always+1 ≈ 1.487")
+        print("=" * len(sep))
+        print(header)
+        print(sep)
+        for r in history:
+            it   = r["iteration"]
+            vals = [r.get(f"{h}_sign_mse", float("nan")) for h in HEAD_NAMES]
+            row  = f"{it:5d} " + " ".join(
+                f"{v:>{col_w}.4f}" if not np.isnan(v) else f"{'n/a':>{col_w}}"
                 for v in vals
             )
             print(row)
+        if len(history) > 1:
+            print(sep)
+            bests = [
+                min(r.get(f"{h}_sign_mse", float("nan")) for r in history)
+                for h in HEAD_NAMES
+            ]
+            print(f"{'BEST':>5} " + " ".join(
+                f"{v:>{col_w}.4f}" if not np.isnan(v) else f"{'n/a':>{col_w}}"
+                for v in bests
+            ))
+        print("=" * len(sep))
 
-    # Rank table at final iteration
+        for lvl in [1, 2, 3]:
+            key_suffix = f"_sign_mse_L{lvl}"
+            if f"{HEAD_NAMES[0]}{key_suffix}" not in history[0]:
+                continue
+            print(f"\n{'Iter':>5} " + " ".join(f"{l:>{col_w}}" for l in labels) +
+                  f"  ← L{lvl} sign MSE")
+            print(sep)
+            for r in history:
+                it   = r["iteration"]
+                vals = [r.get(f"{h}{key_suffix}", float("nan")) for h in HEAD_NAMES]
+                print(f"{it:5d} " + " ".join(
+                    f"{v:>{col_w}.4f}" if not np.isnan(v) else f"{'n/a':>{col_w}}"
+                    for v in vals
+                ))
+
+    # ------------------------------------------------------------------
+    # Final-iteration ranking by sign MSE (or sign acc as fallback)
+    # ------------------------------------------------------------------
     final = history[-1]
+    use_mse = f"{HEAD_NAMES[0]}_sign_mse" in final
     print(f"\n{'─'*40}")
-    print(f"  FINAL ITER {final['iteration']} — RANKING by overall sign accuracy")
-    print(f"{'─'*40}")
-    ranked = sorted(
-        [(HEAD_LABELS[h], final.get(f"{h}_sign_acc", float("nan"))) for h in HEAD_NAMES],
-        key=lambda x: -x[1] if not np.isnan(x[1]) else -999,
-    )
-    for rank, (label, acc) in enumerate(ranked, 1):
-        bar = "█" * int(acc * 30) if not np.isnan(acc) else ""
-        print(f"  {rank}. {label:<10s} {acc*100:5.1f}%  {bar}")
+    if use_mse:
+        print(f"  FINAL ITER {final['iteration']} — RANKING by sign MSE (lower is better)")
+        print(f"{'─'*40}")
+        ranked = sorted(
+            [(HEAD_LABELS[h], final.get(f"{h}_sign_mse", float("nan"))) for h in HEAD_NAMES],
+            key=lambda x: x[1] if not np.isnan(x[1]) else 999,
+        )
+        for rank, (label, mse) in enumerate(ranked, 1):
+            bar = "█" * max(0, int((1.0 - mse) * 20)) if not np.isnan(mse) else ""
+            print(f"  {rank}. {label:<10s} MSE={mse:.4f}  {bar}")
+    else:
+        print(f"  FINAL ITER {final['iteration']} — RANKING by overall sign accuracy")
+        print(f"{'─'*40}")
+        ranked = sorted(
+            [(HEAD_LABELS[h], final.get(f"{h}_sign_acc", float("nan"))) for h in HEAD_NAMES],
+            key=lambda x: -x[1] if not np.isnan(x[1]) else -999,
+        )
+        for rank, (label, acc) in enumerate(ranked, 1):
+            bar = "█" * int(acc * 30) if not np.isnan(acc) else ""
+            print(f"  {rank}. {label:<10s} {acc*100:5.1f}%  {bar}")
     print()
 
 
@@ -229,12 +285,15 @@ def save_plots(history: list, results_dir: str):
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
     # --- Plot 1: overall sign accuracy per head ---
+    # Reference line: "always predict +1" baseline ≈ 52.4% (fraction of winning positions)
+    BASELINE_ALWAYS_WIN = 52.4
     fig, ax = plt.subplots(figsize=(10, 5))
     for i, head in enumerate(HEAD_NAMES):
         vals = [r.get(f"{head}_sign_acc", np.nan) for r in history]
         ax.plot(iters, [v * 100 for v in vals],
                 label=HEAD_LABELS[head], color=colors[i], marker="o", markersize=4)
-    ax.axhline(50, color="gray", linestyle="--", linewidth=0.8, label="50% chance")
+    ax.axhline(BASELINE_ALWAYS_WIN, color="gray", linestyle="--", linewidth=0.8,
+               label=f"always +1 baseline ({BASELINE_ALWAYS_WIN:.1f}%)")
     ax.set_xlabel("Iteration")
     ax.set_ylabel("Sign Accuracy (%)")
     ax.set_title("Value-Head Sign Accuracy vs Gamesolver (all levels)")
@@ -288,7 +347,32 @@ def save_plots(history: list, results_dir: str):
     plt.close(fig)
     print(f"Plot saved: {path3}")
 
-    # --- Plot 4: final-iteration bar chart ---
+    # --- Plot 4: sign MSE over training ---
+    # Baselines: always predict 0 ≈ 0.861, always predict +1 ≈ 1.487
+    has_mse = f"{HEAD_NAMES[0]}_sign_mse" in history[0]
+    if has_mse:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for i, head in enumerate(HEAD_NAMES):
+            vals = [r.get(f"{head}_sign_mse", np.nan) for r in history]
+            ax.plot(iters, vals, label=HEAD_LABELS[head],
+                    color=colors[i], marker="o", markersize=4)
+        ax.axhline(0.861, color="gray",  linestyle="--", linewidth=0.8,
+                   label="always 0 (≈0.861)")
+        ax.axhline(1.487, color="brown", linestyle=":",  linewidth=0.8,
+                   label="always +1 (≈1.487)")
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel("MSE vs sign(optimal score)")
+        ax.set_title("Value-Head Sign MSE vs Gamesolver (all levels, lower is better)")
+        ax.legend(loc="upper right", fontsize=9)
+        ax.set_ylim(0, 2.0)
+        ax.grid(True, alpha=0.3)
+        path4 = os.path.join(results_dir, "sign_mse_all_heads.png")
+        fig.tight_layout()
+        fig.savefig(path4, dpi=120)
+        plt.close(fig)
+        print(f"Plot saved: {path4}")
+
+    # --- Plot 5: final-iteration bar chart ---
     final = history[-1]
     fig, ax = plt.subplots(figsize=(9, 4))
     for lvl_idx, (lvl, hatch) in enumerate([(None, ""), (1, "//"), (2, "\\\\"), (3, "xx")]):
@@ -299,17 +383,17 @@ def save_plots(history: list, results_dir: str):
         ax.bar(x, vals, width=0.18, label=label, hatch=hatch, alpha=0.85)
     ax.set_xticks(np.arange(len(HEAD_NAMES)) + 0.3)
     ax.set_xticklabels([HEAD_LABELS[h] for h in HEAD_NAMES], fontsize=9)
-    ax.axhline(50, color="gray", linestyle="--", linewidth=0.8)
+    ax.axhline(BASELINE_ALWAYS_WIN, color="gray", linestyle="--", linewidth=0.8)
     ax.set_ylim(0, 100)
     ax.set_ylabel("Sign Accuracy (%)")
     ax.set_title(f"Final Iteration ({final['iteration']}) — Sign Accuracy by Head and Level")
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3, axis="y")
-    path4 = os.path.join(results_dir, "final_iteration_bar.png")
+    path5 = os.path.join(results_dir, "final_iteration_bar.png")
     fig.tight_layout()
-    fig.savefig(path4, dpi=120)
+    fig.savefig(path5, dpi=120)
     plt.close(fig)
-    print(f"Plot saved: {path4}")
+    print(f"Plot saved: {path5}")
 
 
 # ---------------------------------------------------------------------------
