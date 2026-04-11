@@ -1,0 +1,13 @@
+Using CPU
+Loaded 6,000 evaluation positions from data/eval_positions.npz
+
+Starting AlphaZero training
+  Device          : cpu
+  Residual blocks : 3
+  Channels        : 64
+  MCTS sims/move  : 200
+  Self-play games : 20 / iter
+  Total iters     : 25
+  Value heads     : 6 (game_outcome, mcts_q, minimax_net_d1, minimax_net_d2, minimax_net_d3, minimax_q_n10)
+
+Self-play:   0%|          | 0/20 [00:00<?, ?it/s]Self-play:   5%|▌         | 1/20 [00:08<02:46,  8.78s/it]Self-play:  10%|█         | 2/20 [00:11<01:29,  4.98s/it]
