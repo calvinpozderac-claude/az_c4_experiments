@@ -23,10 +23,14 @@ class SelfPlayTrainer:
     Orchestrates the AlphaZero training loop:
       self-play  →  fill replay buffer  →  train network  →  repeat.
 
-    The network has six value heads (see AlphaZeroNet for semantics).  All
-    six are trained jointly; only head 0 (game_outcome) is used inside the
-    MCTS tree search.  The five auxiliary head targets are derived from the
-    MCTS tree statistics after each per-move search.
+    The network uses a Gated Mixture-of-Experts value architecture:
+      - 5 auxiliary heads (heads 1-5) trained on MCTS-derived targets
+      - 1 GatedMetaHead (head 0, game_outcome) that combines aux head outputs
+        with a learned per-position gate, trained on the true game outcome z.
+
+    Stop-gradient at the aux→meta boundary in AlphaZeroNet.forward() ensures
+    the game-outcome loss does not corrupt the auxiliary head objectives.
+    Only head 0 (game_outcome, the meta head output) is used in MCTS search.
     """
 
     def __init__(self, config, device: torch.device):
@@ -236,6 +240,7 @@ class SelfPlayTrainer:
         current_lr = self.scheduler.get_last_lr()[0]
 
         # Short 3-char aliases for the per-head loss display
+        # gam = GatedMetaHead (game_outcome), rest are auxiliary heads
         _HEAD_ABBREV = ["gam", "mcq", "mn1", "mn2", "mn3", "mqn"]
         if losses:
             head_parts = "  ".join(
