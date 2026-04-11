@@ -4,12 +4,12 @@ Evaluation of AlphaZero network against optimal gamesolver positions.
 Two evaluation modes
 --------------------
 1. value_accuracy  (fast, batched)
-   Runs the network's value head on the pre-computed canonical board tensors.
-   O(N / batch_size) network forward passes.
+   Runs the network's value heads on the pre-computed canonical board tensors.
+   Reports sign accuracy for every value head.
 
 2. mcts_accuracy   (slow, per-position)
    Reconstructs each game state from its move string and runs full MCTS.
-   More accurate but ~100x slower; use on a small subset.
+   Measures sign accuracy of the MCTS root Q (head 0 after search).
 
 Score sign convention (gamesolver)
 -----------------------------------
@@ -37,7 +37,7 @@ from eval.preprocess import load_preprocessed
 
 
 # ---------------------------------------------------------------------------
-# Fast value-head evaluation (batched)
+# Fast value-head evaluation (batched) — all six heads
 # ---------------------------------------------------------------------------
 
 def evaluate_value_accuracy(
@@ -48,13 +48,13 @@ def evaluate_value_accuracy(
     batch_size: int = 512,
 ) -> Dict[str, float]:
     """
-    Evaluate network value head against optimal scores.
+    Evaluate all value heads against optimal gamesolver scores.
 
-    Metrics
-    -------
-    sign_accuracy        overall fraction where sign(pred) == sign(score)
-    sign_accuracy_L{n}   per difficulty level
-    strong_sign_accuracy fraction on positions where |score| > 1 (no borderline draws)
+    For each head, reports:
+      sign_accuracy        overall fraction where sign(pred) == sign(score)
+      sign_accuracy_L{n}   per difficulty level
+      strong_sign_accuracy fraction on positions where |score| > 1
+    Keys are prefixed with the head name, e.g. "game_outcome_sign_accuracy".
     """
     boards = data["boards"]
     scores = data["scores"]
@@ -66,31 +66,35 @@ def evaluate_value_accuracy(
         levels = levels[:max_positions]
 
     n = len(boards)
-    pred_values = np.zeros(n, dtype=np.float32)
+    num_heads = network.NUM_VALUE_HEADS
+    pred_values = np.zeros((n, num_heads), dtype=np.float32)
 
     network.eval()
     with torch.no_grad():
         for start in tqdm(range(0, n, batch_size), desc="Value eval", leave=False):
-            end = min(start + batch_size, n)
+            end   = min(start + batch_size, n)
             batch = torch.from_numpy(boards[start:end]).to(device)
-            _, values = network(batch)
-            pred_values[start:end] = values.squeeze(-1).cpu().numpy()
+            _, values = network(batch)                      # (batch, 6)
+            pred_values[start:end] = values.cpu().numpy()
 
-    pred_sign = np.sign(pred_values)
-    true_sign = np.sign(scores)
-    correct = pred_sign == true_sign
+    true_sign   = np.sign(scores)
+    strong_mask = np.abs(scores) > 1
+    unique_levels = sorted(set(levels.tolist()))
 
     results: Dict[str, float] = {}
-    results["sign_accuracy"] = float(correct.mean())
+    for h, head_name in enumerate(network.VALUE_HEAD_NAMES):
+        pred_sign = np.sign(pred_values[:, h])
+        correct   = pred_sign == true_sign
 
-    for lvl in sorted(set(levels.tolist())):
-        mask = levels == lvl
-        if mask.sum() > 0:
-            results[f"sign_accuracy_L{lvl}"] = float(correct[mask].mean())
-
-    strong_mask = np.abs(scores) > 1
-    if strong_mask.sum() > 0:
-        results["strong_sign_accuracy"] = float(correct[strong_mask].mean())
+        prefix = head_name
+        results[f"{prefix}_sign_acc"]        = float(correct.mean())
+        results[f"{prefix}_strong_sign_acc"] = (
+            float(correct[strong_mask].mean()) if strong_mask.sum() > 0 else float("nan")
+        )
+        for lvl in unique_levels:
+            mask = levels == lvl
+            if mask.sum() > 0:
+                results[f"{prefix}_sign_acc_L{lvl}"] = float(correct[mask].mean())
 
     return results
 
@@ -107,48 +111,45 @@ def evaluate_mcts_accuracy(
     seed: int = 42,
 ) -> Dict[str, float]:
     """
-    Evaluate full MCTS value estimates against optimal scores.
+    Evaluate full MCTS value estimates (root Q) against optimal scores.
 
     Reconstructs game states from move strings so MCTS can search from them.
+    Measures sign accuracy of the MCTS root Q, which corresponds to head 0
+    (game_outcome) trained via many simulations.
 
-    Parameters
-    ----------
-    mcts          : configured MCTS instance (wraps a trained network)
-    data          : dict from load_preprocessed()
-    max_positions : cap on how many positions to evaluate (chosen randomly)
-    level         : if set, evaluate only positions from this difficulty level
-    seed          : random seed for position sampling
+    NOTE: creates a fresh MCTS context for each position (no tree reuse).
     """
-    scores = data["scores"]
-    levels = data["levels"]
+    scores       = data["scores"]
+    levels       = data["levels"]
     move_strings = data["move_strings"]
 
     if level is not None:
-        mask = levels == level
-        scores = scores[mask]
+        mask         = levels == level
+        scores       = scores[mask]
         move_strings = move_strings[mask]
 
     n = len(scores)
     if n > max_positions:
-        rng = np.random.default_rng(seed)
-        idx = rng.choice(n, max_positions, replace=False)
-        scores = scores[idx]
+        rng  = np.random.default_rng(seed)
+        idx  = rng.choice(n, max_positions, replace=False)
+        scores       = scores[idx]
         move_strings = move_strings[idx]
 
     pred_values = np.zeros(len(scores), dtype=np.float32)
 
     for i, move_str in enumerate(tqdm(move_strings, desc="MCTS eval", leave=False)):
         game = Connect4.from_move_string(str(move_str))
+        # run() returns root Q — the head-0 backed-up estimate after full search
         _, value = mcts.run(game, temperature=0, add_dirichlet=False)
         pred_values[i] = value
 
     pred_sign = np.sign(pred_values)
     true_sign = np.sign(scores)
-    correct = pred_sign == true_sign
+    correct   = pred_sign == true_sign
 
     results: Dict[str, float] = {
         "mcts_sign_accuracy": float(correct.mean()),
-        "n_evaluated": len(scores),
+        "n_evaluated":        len(scores),
     }
     strong_mask = np.abs(scores) > 1
     if strong_mask.sum() > 0:
@@ -162,14 +163,17 @@ def evaluate_mcts_accuracy(
 # ---------------------------------------------------------------------------
 
 def print_evaluation_results(results: Dict[str, float], header: str = "Evaluation"):
-    width = 40
+    width = 44
     print(f"\n{'=' * width}")
     print(f"  {header}")
     print(f"{'=' * width}")
     for key in sorted(results.keys()):
         val = results[key]
         if isinstance(val, float):
-            print(f"  {key:<35s}  {val:.4f}  ({val * 100:.1f}%)")
+            if np.isnan(val):
+                print(f"  {key:<39s}  {'n/a':>7s}")
+            else:
+                print(f"  {key:<39s}  {val:.4f}  ({val * 100:.1f}%)")
         else:
-            print(f"  {key:<35s}  {val}")
+            print(f"  {key:<39s}  {val}")
     print(f"{'=' * width}\n")

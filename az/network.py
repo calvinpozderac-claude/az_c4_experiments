@@ -34,19 +34,58 @@ class ResBlock(nn.Module):
         return F.relu(out + residual)
 
 
+class ValueHead(nn.Module):
+    """
+    One value head: 1-filter conv → norm → ReLU → flatten → linear(64) → tanh → scalar.
+    All six value heads share this architecture but have fully independent weights.
+    """
+
+    def __init__(self, num_channels: int, norm_type: str = "batch"):
+        super().__init__()
+        self.conv = nn.Conv2d(num_channels, 1, kernel_size=1, bias=False)
+        self.norm = _make_norm(norm_type, 1)
+        self.fc1  = nn.Linear(ROWS * COLS, 64)
+        self.fc2  = nn.Linear(64, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        v = F.relu(self.norm(self.conv(x)))
+        v = F.relu(self.fc1(v.flatten(1)))
+        return torch.tanh(self.fc2(v))   # (batch, 1)
+
+
 class AlphaZeroNet(nn.Module):
     """
-    AlphaZero-style dual-head network for Connect Four.
+    AlphaZero-style dual-head network for Connect Four extended with six
+    independent value heads that all branch off the same residual tower.
 
-    Input : (batch, 3, ROWS, COLS)  -- canonical board (see c4/game.py)
-    Output: policy_logits (batch, ACTION_SIZE),  value (batch, 1)
+    Input : (batch, 3, ROWS, COLS)
+    Output: policy_logits  (batch, ACTION_SIZE)
+            values         (batch, NUM_VALUE_HEADS)  — one tanh scalar per head
 
-    The policy head produces unnormalised logits; apply softmax externally.
-    The value head produces a scalar in (-1, 1) via tanh.
+    Value head semantics
+    --------------------
+    Head 0  game_outcome   : final self-play game result (+1/0/-1)
+                             — the only head used inside the MCTS tree search
+    Head 1  mcts_q         : MCTS root Q = W/N after the search completes
+    Head 2  minimax_net_d1 : 1-ply minimax over per-node network evaluations
+    Head 3  minimax_net_d2 : 2-ply minimax over per-node network evaluations
+    Head 4  minimax_net_d3 : 3-ply minimax over per-node network evaluations
+    Head 5  minimax_q_n10  : recursive minimax over Q values (nodes with N ≥ 10)
 
-    norm_type: "batch" (default) or "layer" — use "layer" on DirectML where
-               BatchNorm2d is unsupported.
+    All values represent the *current player's* expected outcome; positive
+    means the current player is predicted to win.
     """
+
+    NUM_VALUE_HEADS = 6
+
+    VALUE_HEAD_NAMES = [
+        "game_outcome",
+        "mcts_q",
+        "minimax_net_d1",
+        "minimax_net_d2",
+        "minimax_net_d3",
+        "minimax_q_n10",
+    ]
 
     def __init__(
         self,
@@ -64,7 +103,7 @@ class AlphaZeroNet(nn.Module):
             nn.ReLU(),
         )
 
-        # Residual tower
+        # Residual tower — shared by all heads
         self.tower = nn.Sequential(
             *[ResBlock(num_channels, norm_type) for _ in range(num_res_blocks)]
         )
@@ -72,15 +111,21 @@ class AlphaZeroNet(nn.Module):
         # Policy head: 2-filter conv → flatten → FC
         self.policy_conv = nn.Conv2d(num_channels, 2, kernel_size=1, bias=False)
         self.policy_norm = _make_norm(norm_type, 2)
-        self.policy_fc = nn.Linear(2 * ROWS * COLS, ACTION_SIZE)
+        self.policy_fc   = nn.Linear(2 * ROWS * COLS, ACTION_SIZE)
 
-        # Value head: 1-filter conv → flatten → 64 → 1
-        self.value_conv = nn.Conv2d(num_channels, 1, kernel_size=1, bias=False)
-        self.value_norm = _make_norm(norm_type, 1)
-        self.value_fc1 = nn.Linear(ROWS * COLS, 64)
-        self.value_fc2 = nn.Linear(64, 1)
+        # Six independent value heads
+        self.value_heads = nn.ModuleList([
+            ValueHead(num_channels, norm_type)
+            for _ in range(self.NUM_VALUE_HEADS)
+        ])
 
     def forward(self, x: torch.Tensor):
+        """
+        Returns
+        -------
+        policy_logits : (batch, ACTION_SIZE)
+        values        : (batch, NUM_VALUE_HEADS)   each in (−1, 1)
+        """
         x = self.stem(x)
         x = self.tower(x)
 
@@ -88,25 +133,23 @@ class AlphaZeroNet(nn.Module):
         p = F.relu(self.policy_norm(self.policy_conv(x)))
         policy_logits = self.policy_fc(p.flatten(1))
 
-        # Value
-        v = F.relu(self.value_norm(self.value_conv(x)))
-        v = F.relu(self.value_fc1(v.flatten(1)))
-        value = torch.tanh(self.value_fc2(v))
+        # All value heads — each produces (batch, 1); cat → (batch, 6)
+        values = torch.cat([head(x) for head in self.value_heads], dim=1)
 
-        return policy_logits, value
+        return policy_logits, values
 
     @torch.no_grad()
     def predict(self, board_tensor: torch.Tensor):
         """
-        Single-sample inference (no batch dim required).
+        Single-sample inference.
 
         Args:
-            board_tensor: (3, ROWS, COLS) float tensor (already on the right device)
+            board_tensor: (3, ROWS, COLS) float tensor on the right device
         Returns:
-            policy_probs: (ACTION_SIZE,) tensor (softmax applied)
-            value:        float scalar
+            policy_probs : (ACTION_SIZE,) tensor
+            values       : (NUM_VALUE_HEADS,) tensor
         """
         self.eval()
-        policy_logits, value = self(board_tensor.unsqueeze(0))
+        policy_logits, values = self(board_tensor.unsqueeze(0))
         policy_probs = F.softmax(policy_logits, dim=-1).squeeze(0)
-        return policy_probs, value.item()
+        return policy_probs, values.squeeze(0)

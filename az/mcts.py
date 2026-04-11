@@ -11,6 +11,21 @@ current_player is the opponent of the parent's current_player).
 
 Backup propagates the value up the tree, negating at each level to
 convert between the two players' perspectives.
+
+Extra value targets
+-------------------
+After each run() the root tree is used to compute five additional
+training targets that are stored in self._last_root and can be retrieved
+via compute_value_targets().  These are fed to the five auxiliary value
+heads in AlphaZeroNet.
+
+  mcts_q         : root.Q after the search (W/N aggregated over all sims)
+  minimax_net_d1 : 1-ply minimax over per-node network evaluations
+  minimax_net_d2 : 2-ply minimax over per-node network evaluations
+  minimax_net_d3 : 3-ply minimax over per-node network evaluations
+  minimax_q_n10  : recursive minimax over Q values (nodes with N ≥ 10)
+
+All targets are in [−1, 1] from the root's current_player's perspective.
 """
 
 import math
@@ -27,6 +42,7 @@ class MCTSNode:
         "state", "parent", "action", "prior",
         "children", "N", "W", "Q",
         "is_expanded", "is_terminal", "terminal_value",
+        "value_net",   # network's raw evaluation when this node was first expanded
     ]
 
     def __init__(
@@ -36,27 +52,27 @@ class MCTSNode:
         action: Optional[int] = None,
         prior: float = 0.0,
     ):
-        self.state = state
+        self.state  = state
         self.parent = parent
         self.action = action
-        self.prior = prior
+        self.prior  = prior
         self.children: Dict[int, "MCTSNode"] = {}
-        self.N: int = 0
+        self.N: int   = 0
         self.W: float = 0.0
         self.Q: float = 0.0
-        self.is_expanded: bool = False
-        self.is_terminal: bool = state.game_over
+        self.is_expanded: bool  = False
+        self.is_terminal: bool  = state.game_over
+        self.value_net:   float = 0.0   # set by _expand(); used for minimax targets
 
-        # Terminal value from state.current_player's perspective.
-        # After a winning move: state.winner = prev_player = -state.current_player.
-        # So the player to move lost → terminal_value = -1.
         if self.is_terminal:
             if state.winner == -state.current_player:
-                self.terminal_value = -1.0   # current player lost
+                self.terminal_value = -1.0
             elif state.winner == state.current_player:
-                self.terminal_value = 1.0    # shouldn't occur in normal play
+                self.terminal_value = 1.0
             else:
-                self.terminal_value = 0.0    # draw
+                self.terminal_value = 0.0
+            # Treat terminal_value as the "network evaluation" for minimax
+            self.value_net = self.terminal_value
         else:
             self.terminal_value = 0.0
 
@@ -71,10 +87,11 @@ class MCTS:
         c_puct: float = 1.5,
         num_simulations: int = 200,
     ):
-        self.network = network
-        self.device = device
-        self.c_puct = c_puct
+        self.network        = network
+        self.device         = device
+        self.c_puct         = c_puct
         self.num_simulations = num_simulations
+        self._last_root: Optional[MCTSNode] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -93,12 +110,11 @@ class MCTS:
 
         Returns
         -------
-        action_probs : np.ndarray of shape (COLS,)
-            Visit-count-based action distribution (sums to 1 over valid moves).
-        root_value : float
-            Value estimate from root's current_player's perspective.
+        action_probs : (COLS,) visit-count distribution (sums to 1 over valid moves)
+        root_value   : float — root.Q after search (head-0 value estimate)
         """
         if root_state.game_over:
+            self._last_root = None
             return np.zeros(COLS, dtype=np.float32), 0.0
 
         root = MCTSNode(root_state.clone())
@@ -107,22 +123,19 @@ class MCTS:
         init_value = self._expand(root)
         self._backup(root, init_value)
 
-        # Optional Dirichlet noise on root children for exploration during self-play
         if add_dirichlet and root.children:
             self._add_dirichlet_noise(root, dirichlet_alpha, dirichlet_epsilon)
 
-        # Remaining simulations
         for _ in range(self.num_simulations - 1):
             node = root
-            # Selection: walk to a leaf
             while node.is_expanded and not node.is_terminal:
                 node = self._select_child(node)
-            # Evaluation
             value = node.terminal_value if node.is_terminal else self._expand(node)
-            # Backup
             self._backup(node, value)
 
-        # Build action probability vector from visit counts
+        # Save root for compute_value_targets()
+        self._last_root = root
+
         visit_counts = np.array(
             [root.children[a].N if a in root.children else 0 for a in range(COLS)],
             dtype=np.float32,
@@ -134,10 +147,39 @@ class MCTS:
             action_probs[best] = 1.0
         else:
             counts_t = visit_counts ** (1.0 / temperature)
-            total = counts_t.sum()
+            total    = counts_t.sum()
             action_probs = counts_t / (total + 1e-8)
 
         return action_probs, root.Q
+
+    def compute_value_targets(self, min_visits_q: int = 10) -> np.ndarray:
+        """
+        Compute the five MCTS-derived value targets from the most recent run().
+
+        Must be called immediately after run() (before the next run()).
+
+        Parameters
+        ----------
+        min_visits_q : int
+            Minimum N for a node to be included in the minimax-Q traversal.
+
+        Returns
+        -------
+        targets : (5,) float32 array
+            [mcts_q, minimax_net_d1, minimax_net_d2, minimax_net_d3, minimax_q_n10]
+            all from the root position's current_player's perspective.
+        """
+        if self._last_root is None:
+            return np.zeros(5, dtype=np.float32)
+
+        root = self._last_root
+        return np.array([
+            root.Q,
+            self._minimax_net(root, depth=1),
+            self._minimax_net(root, depth=2),
+            self._minimax_net(root, depth=3),
+            self._minimax_q(root, min_visits=min_visits_q),
+        ], dtype=np.float32)
 
     def get_best_move(self, state: Connect4) -> int:
         """Greedy best move (temperature=0, no noise)."""
@@ -146,23 +188,70 @@ class MCTS:
         return max(valid, key=lambda m: action_probs[m])
 
     # ------------------------------------------------------------------
+    # Extra target helpers
+    # ------------------------------------------------------------------
+
+    def _minimax_net(self, node: MCTSNode, depth: int) -> float:
+        """
+        Minimax over network evaluations stored at each expanded node.
+
+        Only children that were visited (N > 0) are eligible — unvisited
+        children have value_net = 0 (uninformative default) and are skipped.
+
+        Returns the value from node's current_player's perspective.
+        """
+        if node.is_terminal:
+            return node.terminal_value
+
+        if depth == 0:
+            return node.value_net
+
+        # Children evaluated by the network: visited (N > 0) and either
+        # terminal (value_net set to terminal_value) or expanded by network.
+        candidates = [
+            c for c in node.children.values()
+            if c.N > 0 and (c.is_expanded or c.is_terminal)
+        ]
+
+        if not candidates:
+            return node.value_net   # no data: fall back to own estimate
+
+        # child.value_net is from child's player perspective (opponent) → negate
+        return max(-self._minimax_net(c, depth - 1) for c in candidates)
+
+    def _minimax_q(self, node: MCTSNode, min_visits: int) -> float:
+        """
+        Recursive minimax over Q values, restricted to nodes with N ≥ min_visits.
+
+        When a node has no children meeting the threshold the recursion stops
+        and the node's own Q is returned as the leaf estimate.
+
+        Returns the value from node's current_player's perspective.
+        """
+        if node.is_terminal:
+            return node.terminal_value
+
+        reliable = [c for c in node.children.values() if c.N >= min_visits]
+
+        if not reliable:
+            # Leaf of the reliable subtree: node's Q is the best available estimate
+            return node.Q
+
+        # child.Q is from child's player perspective (opponent) → negate
+        return max(-self._minimax_q(c, min_visits) for c in reliable)
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _select_child(self, node: MCTSNode) -> MCTSNode:
-        """
-        PUCT selection from node's perspective.
-
-        child.Q is from child's current_player's perspective (= node's opponent),
-        so we negate it to get node's player's perspective before adding U.
-        """
         sqrt_N = math.sqrt(node.N)
-        best_score = -math.inf
+        best_score  = -math.inf
         best_child: Optional[MCTSNode] = None
 
         for child in node.children.values():
-            q = -child.Q  # flip to parent's perspective
-            u = self.c_puct * child.prior * sqrt_N / (1 + child.N)
+            q     = -child.Q
+            u     = self.c_puct * child.prior * sqrt_N / (1 + child.N)
             score = q + u
             if score > best_score:
                 best_score = score
@@ -174,21 +263,22 @@ class MCTS:
     def _expand(self, node: MCTSNode) -> float:
         """
         Evaluate node with the network, create child nodes.
-
-        Returns the value estimate from node.state.current_player's perspective.
+        Stores the head-0 (game-outcome) value in node.value_net.
+        Returns that value (used by MCTS backup).
         """
-        state = node.state
+        state   = node.state
         board_t = torch.from_numpy(state.get_canonical_board()).unsqueeze(0).to(self.device)
 
         self.network.eval()
         with torch.no_grad():
-            policy_logits, value_t = self.network(board_t)
+            policy_logits, values = self.network(board_t)
+            # values: (1, NUM_VALUE_HEADS) — use head 0 for MCTS tree search
             policy = F.softmax(policy_logits, dim=-1).squeeze(0).cpu().numpy()
-            value = float(value_t.item())
+            value  = float(values[0, 0].item())
+
+        node.value_net = value   # store for minimax target computation
 
         valid_moves = state.get_valid_moves()
-
-        # Mask invalid moves and renormalise
         policy_masked = np.zeros(COLS, dtype=np.float32)
         for m in valid_moves:
             policy_masked[m] = policy[m]
@@ -210,24 +300,15 @@ class MCTS:
         return value
 
     def _backup(self, node: MCTSNode, value: float):
-        """
-        Propagate value up the tree.
-
-        value is from node.state.current_player's perspective.
-        We store Q at each node from that node's own current_player's perspective,
-        negating once per level because the player alternates.
-        """
         current: Optional[MCTSNode] = node
         while current is not None:
             current.N += 1
             current.W += value
-            current.Q = current.W / current.N
-            value = -value          # Flip for the parent (opposite player)
-            current = current.parent
+            current.Q  = current.W / current.N
+            value      = -value
+            current    = current.parent
 
-    def _add_dirichlet_noise(
-        self, node: MCTSNode, alpha: float, epsilon: float
-    ):
+    def _add_dirichlet_noise(self, node: MCTSNode, alpha: float, epsilon: float):
         children = list(node.children.values())
         k = len(children)
         if k == 0:

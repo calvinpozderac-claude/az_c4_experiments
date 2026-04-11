@@ -16,21 +16,22 @@ class ReplayBuffer:
         # Deque with maxlen enforces the circular behaviour automatically
         self._buf: deque = deque(maxlen=max_size)
 
-    def add_game(self, game_data: List[Tuple[np.ndarray, np.ndarray, float]]):
+    def add_game(self, game_data: List[Tuple[np.ndarray, np.ndarray, np.ndarray]]):
         """
         Store a completed game.
 
-        Each element of game_data is (canonical_board, mcts_policy, outcome):
+        Each element of game_data is (canonical_board, mcts_policy, values):
           canonical_board: (3, ROWS, COLS) float32
           mcts_policy:     (COLS,) float32  -- normalised visit counts
-          outcome:         float  (-1, 0, 1) from that position's current_player's POV
+          values:          (NUM_VALUE_HEADS,) float32  -- one target per head
         """
-        for board, policy, value in game_data:
-            self._buf.append((board, policy, np.float32(value)))
+        for board, policy, values in game_data:
+            values = np.asarray(values, dtype=np.float32)
+            self._buf.append((board, policy, values))
             # Horizontal flip augmentation (Connect4 is left-right symmetric)
-            flipped_board = board[:, :, ::-1].copy()
+            flipped_board  = board[:, :, ::-1].copy()
             flipped_policy = policy[::-1].copy()
-            self._buf.append((flipped_board, flipped_policy, np.float32(value)))
+            self._buf.append((flipped_board, flipped_policy, values))
 
     def sample(self, batch_size: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -49,7 +50,7 @@ class ReplayBuffer:
         return (
             np.stack(boards).astype(np.float32),
             np.stack(policies).astype(np.float32),
-            np.array(values, dtype=np.float32),
+            np.stack(values).astype(np.float32),   # (batch, NUM_VALUE_HEADS)
         )
 
     def __len__(self) -> int:

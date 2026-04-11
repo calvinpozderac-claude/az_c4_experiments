@@ -90,7 +90,7 @@ class EndgameBuffer:
             evicted_key = self._keys.popleft()
             self._seen.discard(evicted_key)
 
-        self._data.append((board, policy, np.float32(value)))
+        self._data.append((board, policy, np.asarray(value, dtype=np.float32)))
         self._keys.append(key)
         self._seen.add(key)
         return True
@@ -117,7 +117,7 @@ class EndgameBuffer:
         return (
             np.stack(boards).astype(np.float32),
             np.stack(policies).astype(np.float32),
-            np.array(values, dtype=np.float32),
+            np.stack(values).astype(np.float32),   # (batch, NUM_VALUE_HEADS)
         )
 
     # ------------------------------------------------------------------

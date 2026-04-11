@@ -19,6 +19,7 @@ class MCTSConfig:
     dirichlet_alpha: float = 0.3    # Dirichlet noise alpha (root exploration)
     dirichlet_epsilon: float = 0.25 # Fraction of prior replaced by noise
     temp_threshold: int = 20        # Moves before switching to greedy (↑ from 15: more exploratory games)
+    minimax_q_min_visits: int = 10  # Minimum N for a node to be used in the minimax-Q target (head 5)
 
 
 @dataclass
