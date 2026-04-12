@@ -103,12 +103,21 @@ def run_evaluation(
 ) -> dict:
     """
     Evaluate and return a flat dict of metrics for this iteration.
-    Keys example: "game_outcome_sign_acc", "game_outcome_sign_acc_L1", ...
+
+    Prints a compact one-line MSE table:
+      [Eval  5]  GameOut=0.8321  MctsQ=0.7612  MM-Net1=0.8100  ...
+    Lower MSE = better.  Baseline: always predict 0 ≈ 0.861.
     """
     results = evaluate_value_accuracy(
         trainer.network, trainer.device, eval_data, batch_size=512
     )
-    print_evaluation_results(results, header=f"Value-head eval (iter {trainer.iteration})")
+
+    # Compact per-iteration line: sign MSE for each head (lower is better)
+    mse_parts = "  ".join(
+        f"{HEAD_LABELS[h]}={results[f'{h}_sign_mse']:.4f}"
+        for h in HEAD_NAMES
+    )
+    print(f"[Eval {trainer.iteration:3d}]  sign MSE (↓ better, baseline≈0.861)  {mse_parts}")
 
     if run_mcts:
         eval_mcts = MCTS(
