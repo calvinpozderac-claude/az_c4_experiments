@@ -23,14 +23,16 @@ class SelfPlayTrainer:
     Orchestrates the AlphaZero training loop:
       self-play  →  fill replay buffer  →  train network  →  repeat.
 
-    The network uses a Gated Mixture-of-Experts value architecture:
+    The network uses a layered (pure-stack) value architecture:
       - 5 auxiliary heads (heads 1-5) trained on MCTS-derived targets
-      - 1 GatedMetaHead (head 0, game_outcome) that combines aux head outputs
-        with a learned per-position gate, trained on the true game outcome z.
+      - 1 LayeredMetaHead (head 0, game_outcome) that combines aux head outputs
+        via a small MLP, trained on the true game outcome z.
 
-    Stop-gradient at the aux→meta boundary in AlphaZeroNet.forward() ensures
-    the game-outcome loss does not corrupt the auxiliary head objectives.
-    Only head 0 (game_outcome, the meta head output) is used in MCTS search.
+    The meta head sees NO tower features — all board information passes through
+    the aux heads first (information bottleneck).  Stop-gradient at the
+    aux→meta boundary means the game-outcome loss trains only the meta head;
+    the tower is shaped entirely by policy loss and aux head MSE losses.
+    Only head 0 (game_outcome) is used in MCTS search.
     """
 
     def __init__(self, config, device: torch.device):

@@ -53,73 +53,54 @@ class ValueHead(nn.Module):
         return torch.tanh(self.fc2(v))   # (batch, 1)
 
 
-class GatedMetaHead(nn.Module):
+class LayeredMetaHead(nn.Module):
     """
-    Gated Mixture-of-Experts meta head for game outcome prediction.
+    Layered (pure-stack) meta head for game outcome prediction.
 
-    Takes tower features and the (detached) outputs of the 5 auxiliary value heads.
-    Learns per-position weights over the aux heads (the MoE gate) and adds a small
-    residual correction read directly from the tower, then produces a tanh scalar.
+    Sees ONLY the 5 auxiliary head outputs — no direct access to tower features.
+    All board information must pass through the aux heads first, creating a clean
+    information bottleneck:
 
-    The caller is responsible for passing aux_values with stop-gradient applied
-    (.detach()) so that the game-outcome loss does not corrupt the aux head objectives.
+        board → tower → aux heads (stop-grad) → LayeredMetaHead → game_outcome
+
+    The caller is responsible for passing aux_values detached (.detach()) so
+    that the game-outcome loss does not flow back into the aux heads or tower.
+
+    Gradient flow
+    -------------
+    Meta loss → LayeredMetaHead weights only.
+    Tower gets ZERO gradient from the game-outcome objective; it is trained
+    entirely by the policy loss and the 5 auxiliary head MSE losses.
 
     Architecture
     ------------
-    Gate path  : tower → conv(1) → norm → ReLU → flatten
-                 cat with aux_values → FC(H*W+5, 5) → softmax → weights
-    Residual   : tower → conv(1) → norm → ReLU → flatten → FC(H*W,32) → ReLU → FC(32,1)
-    Output     : tanh(weighted_sum + 0.1 * residual)
+    FC(5, 16) → ReLU → FC(16, 1) → tanh
     """
 
-    NUM_AUX = 5   # fixed: heads 1-5 in the canonical ordering
+    NUM_AUX = 5
 
-    def __init__(self, num_channels: int, norm_type: str = "batch"):
+    def __init__(self):
         super().__init__()
-        flat = ROWS * COLS
+        self.fc1 = nn.Linear(self.NUM_AUX, 16)
+        self.fc2 = nn.Linear(16, 1)
 
-        # Gate pathway
-        self.gate_conv = nn.Conv2d(num_channels, 1, kernel_size=1, bias=False)
-        self.gate_norm = _make_norm(norm_type, 1)
-        self.gate_fc   = nn.Linear(flat + self.NUM_AUX, self.NUM_AUX)
-
-        # Residual correction pathway
-        self.res_conv = nn.Conv2d(num_channels, 1, kernel_size=1, bias=False)
-        self.res_norm = _make_norm(norm_type, 1)
-        self.res_fc1  = nn.Linear(flat, 32)
-        self.res_fc2  = nn.Linear(32, 1)
-
-    def forward(
-        self, tower_feat: torch.Tensor, aux_values: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, aux_values: torch.Tensor) -> torch.Tensor:
         """
         Parameters
         ----------
-        tower_feat : (B, C, H, W)  — residual tower output; full gradient flows here
-        aux_values : (B, 5)        — detached aux head outputs (stop-gradient)
+        aux_values : (B, 5)  — must be detached before calling (stop-gradient)
 
         Returns
         -------
         (B, 1)  tanh-clamped game-outcome estimate
         """
-        # Gate
-        g       = F.relu(self.gate_norm(self.gate_conv(tower_feat)))  # (B, 1, H, W)
-        g_flat  = g.flatten(1)                                         # (B, H*W)
-        gate_in = torch.cat([g_flat, aux_values], dim=1)               # (B, H*W+5)
-        weights = torch.softmax(self.gate_fc(gate_in), dim=1)          # (B, 5)
-        weighted = (weights * aux_values).sum(dim=1, keepdim=True)     # (B, 1)
-
-        # Residual correction
-        r        = F.relu(self.res_norm(self.res_conv(tower_feat)))    # (B, 1, H, W)
-        r_flat   = r.flatten(1)                                         # (B, H*W)
-        residual = torch.tanh(self.res_fc2(F.relu(self.res_fc1(r_flat))))  # (B, 1)
-
-        return torch.tanh(weighted + 0.1 * residual)                   # (B, 1)
+        h = F.relu(self.fc1(aux_values))
+        return torch.tanh(self.fc2(h))
 
 
 class AlphaZeroNet(nn.Module):
     """
-    AlphaZero-style network for Connect Four with a Gated Mixture-of-Experts
+    AlphaZero-style network for Connect Four with a layered (pure-stack)
     value architecture.
 
     Input : (batch, 3, ROWS, COLS)
@@ -128,9 +109,10 @@ class AlphaZeroNet(nn.Module):
 
     Value head semantics (canonical output order)
     ---------------------------------------------
-    Head 0  game_outcome   : GatedMetaHead — predicts final game result (+1/0/-1)
-                             by learning per-position weights over the 5 aux heads
-                             plus a residual correction from tower features.
+    Head 0  game_outcome   : LayeredMetaHead — predicts final game result (+1/0/-1)
+                             by learning a nonlinear combination of the 5 aux heads.
+                             Sees NO tower features directly; board knowledge comes
+                             entirely through the auxiliary head outputs.
                              Stop-gradient separates this head from aux objectives.
                              THIS is the head used inside the MCTS tree search.
     Head 1  mcts_q         : MCTS root Q = W/N after the search completes
@@ -146,16 +128,24 @@ class AlphaZeroNet(nn.Module):
 
     Gradient flow
     -------------
-    Aux head MSE losses → aux heads + shared tower (full gradient).
-    Meta head MSE loss  → GatedMetaHead + shared tower (via gate/res paths only).
-                          stop_grad(aux_values) prevents meta loss from
-                          distorting the auxiliary head training objectives.
+    Policy loss         → policy head + tower (full gradient)
+    Aux head MSE losses → aux heads + tower (full gradient)
+    Meta head MSE loss  → LayeredMetaHead weights only
+                          stop_grad(aux_values) blocks all gradient to aux heads
+                          and to the tower from the game-outcome objective
+
+    Comparison with GatedMetaHead branch
+    -------------------------------------
+    The Gated branch also passes tower features directly into the meta head
+    (via conv+FC paths), so the tower does receive gradient from game_outcome.
+    This branch enforces a strict bottleneck: game_outcome can only influence
+    the network by adjusting how the 5 specialists' opinions are combined.
     """
 
     NUM_VALUE_HEADS = 6   # 1 meta + 5 aux
 
     VALUE_HEAD_NAMES = [
-        "game_outcome",    # [0] meta head (GatedMetaHead)
+        "game_outcome",    # [0] meta head (LayeredMetaHead)
         "mcts_q",          # [1] aux
         "minimax_net_d1",  # [2] aux
         "minimax_net_d2",  # [3] aux
@@ -198,8 +188,8 @@ class AlphaZeroNet(nn.Module):
             for _ in range(len(self.AUX_HEAD_NAMES))
         ])
 
-        # Gated meta head (head 0): combines aux outputs + tower features
-        self.meta_head = GatedMetaHead(num_channels, norm_type)
+        # Layered meta head (head 0): combines aux outputs only — no tower access
+        self.meta_head = LayeredMetaHead()
 
     def forward(self, x: torch.Tensor):
         """
@@ -207,7 +197,7 @@ class AlphaZeroNet(nn.Module):
         -------
         policy_logits : (batch, ACTION_SIZE)
         values        : (batch, NUM_VALUE_HEADS)   each in (−1, 1)
-                        values[:, 0] = game_outcome (meta head)
+                        values[:, 0] = game_outcome (LayeredMetaHead)
                         values[:, 1:] = aux heads
         """
         x = self.stem(x)
@@ -222,9 +212,9 @@ class AlphaZeroNet(nn.Module):
             [head(x) for head in self.aux_value_heads], dim=1
         )
 
-        # Meta head (0): stop-gradient on aux_values so game_outcome loss does
-        # not flow back through the aux head parameters
-        game_outcome = self.meta_head(x, aux_values.detach())  # (batch, 1)
+        # Meta head (0): stop-gradient on aux_values so neither the game_outcome
+        # loss nor its gradient reaches aux heads or the tower
+        game_outcome = self.meta_head(aux_values.detach())  # (batch, 1)
 
         # Canonical order: [game_outcome, mcts_q, mm_d1, mm_d2, mm_d3, mm_q_n10]
         values = torch.cat([game_outcome, aux_values], dim=1)  # (batch, 6)
