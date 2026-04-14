@@ -37,11 +37,13 @@ HEAD_NAMES = AlphaZeroNet.VALUE_HEAD_NAMES   # 6 names
 # Short display label for each head
 HEAD_LABELS = {
     "game_outcome":   "GameOut",
+    "z_direct":       "Z-Dir",
     "mcts_q":         "MctsQ",
     "minimax_net_d1": "MM-Net1",
     "minimax_net_d2": "MM-Net2",
     "minimax_net_d3": "MM-Net3",
-    "minimax_q_n10":  "MM-Q≥10",
+    "minimax_q_n10":  "MM-Q>=10",
+    "proven_minimax": "Proven",
 }
 
 
@@ -449,6 +451,7 @@ def main():
         f"  Total iters     : {config.training.num_iterations}\n"
         f"  Value heads     : {AlphaZeroNet.NUM_VALUE_HEADS} "
         f"({', '.join(AlphaZeroNet.VALUE_HEAD_NAMES)})\n"
+        f"  Off-path N≥     : {config.training.off_path_min_visits} visits\n"
     )
 
     eval_history = []   # list of result dicts, one per evaluated iteration

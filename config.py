@@ -47,6 +47,12 @@ class TrainingConfig:
     endgame_buffer_size: int = 10_000  # unique positions stored
     endgame_lookback: int = 10         # last N moves per game added to buffer
     endgame_batch_size: int = 64       # supplement per training step (0 = disabled)
+    # Off-path buffer: MCTS nodes with N >= off_path_min_visits that are NOT on
+    # the main self-play line.  These have Q and minimax targets (heads 2-7) but
+    # no game-outcome label (heads 0,1 = NaN).  Masked MSE skips NaN targets.
+    off_path_buffer_size: int = 30_000  # unique positions stored
+    off_path_min_visits: int = 25       # minimum N to collect a node
+    off_path_batch_size: int = 64       # supplement per training step (0 = disabled)
 
 
 @dataclass
