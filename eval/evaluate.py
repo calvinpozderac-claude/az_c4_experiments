@@ -62,15 +62,12 @@ def evaluate_value_accuracy(
     """
     Evaluate network value head against optimal gamesolver scores.
 
-    Primary metric: sign_mse = mean((pred - sign(score))^2)
+    Metric: sign_mse = mean((pred - sign(score))^2)
       Measures how close the tanh prediction is to the {-1, 0, +1} target.
       Lower is better. Properly handles draws (sign == 0).
 
-    Also reports sign_accuracy for reference (but this is a weaker metric
-    because it treats draws and non-draws identically at the decision boundary).
-
-    Per-level breakdowns are reported for both metrics (L1/L2/L3) as well as
-    a strong_* variant that excludes near-draw positions (|score| <= 1).
+    Per-level breakdowns (L1/L2/L3) and a strong_* variant that excludes
+    near-draw positions (|score| <= 1) are also reported.
     """
     boards = data["boards"]
     scores = data["scores"]
@@ -93,16 +90,12 @@ def evaluate_value_accuracy(
             pred_values[start:end] = values.squeeze(-1).cpu().numpy()
 
     true_sign = np.sign(scores).astype(np.float32)   # {-1, 0, +1}
-    pred_sign = np.sign(pred_values)
-    correct = pred_sign == true_sign
-    sq_err = (pred_values - true_sign) ** 2           # element-wise squared error
+    sq_err = (pred_values - true_sign) ** 2
 
     strong_mask = np.abs(scores) > 1
     unique_levels = sorted(set(levels.tolist()))
 
     results: Dict[str, float] = {}
-
-    # Primary metric: sign MSE
     results["sign_mse"] = float(sq_err.mean())
     if strong_mask.sum() > 0:
         results["strong_sign_mse"] = float(sq_err[strong_mask].mean())
@@ -110,15 +103,6 @@ def evaluate_value_accuracy(
         mask = levels == lvl
         if mask.sum() > 0:
             results[f"sign_mse_L{lvl}"] = float(sq_err[mask].mean())
-
-    # Secondary: sign accuracy (for reference)
-    results["sign_accuracy"] = float(correct.mean())
-    if strong_mask.sum() > 0:
-        results["strong_sign_accuracy"] = float(correct[strong_mask].mean())
-    for lvl in unique_levels:
-        mask = levels == lvl
-        if mask.sum() > 0:
-            results[f"sign_accuracy_L{lvl}"] = float(correct[mask].mean())
 
     return results
 
@@ -164,19 +148,15 @@ def evaluate_mcts_accuracy(
         pred_values[i] = value
 
     true_sign = np.sign(scores).astype(np.float32)
-    pred_sign = np.sign(pred_values)
-    correct = pred_sign == true_sign
     sq_err = (pred_values - true_sign) ** 2
 
     results: Dict[str, float] = {
         "mcts_sign_mse": float(sq_err.mean()),
-        "mcts_sign_accuracy": float(correct.mean()),
         "n_evaluated": len(scores),
     }
     strong_mask = np.abs(scores) > 1
     if strong_mask.sum() > 0:
         results["mcts_strong_sign_mse"] = float(sq_err[strong_mask].mean())
-        results["mcts_strong_sign_accuracy"] = float(correct[strong_mask].mean())
 
     return results
 
