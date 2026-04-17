@@ -22,11 +22,23 @@ AlphaZero value convention
   value > 0  →  current player is predicted to win
   value < 0  →  current player is predicted to lose
   value ≈ 0  →  draw predicted
+
+Primary benchmark metric: sign_mse
+-----------------------------------
+  MSE between the network's tanh value output and sign(optimal_score) ∈ {-1, 0, +1}.
+
+  sign_accuracy is insufficient when draws are possible: a prediction of 0.9
+  for a draw position (score == 0) scores 100% on sign accuracy but is badly
+  wrong. sign_mse correctly penalises this as (0.9 - 0)^2 = 0.81.
+
+  MSE baselines:
+    always predict  0 : MSE ≈ fraction of non-draw positions (~0.86 on L1-L3 mix)
+    always predict +1 : MSE ≈ 1.49
+    perfect predictor : MSE = 0.00
 """
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from tqdm import tqdm
 from typing import Dict, Optional
 
@@ -48,13 +60,17 @@ def evaluate_value_accuracy(
     batch_size: int = 512,
 ) -> Dict[str, float]:
     """
-    Evaluate network value head against optimal scores.
+    Evaluate network value head against optimal gamesolver scores.
 
-    Metrics
-    -------
-    sign_accuracy        overall fraction where sign(pred) == sign(score)
-    sign_accuracy_L{n}   per difficulty level
-    strong_sign_accuracy fraction on positions where |score| > 1 (no borderline draws)
+    Primary metric: sign_mse = mean((pred - sign(score))^2)
+      Measures how close the tanh prediction is to the {-1, 0, +1} target.
+      Lower is better. Properly handles draws (sign == 0).
+
+    Also reports sign_accuracy for reference (but this is a weaker metric
+    because it treats draws and non-draws identically at the decision boundary).
+
+    Per-level breakdowns are reported for both metrics (L1/L2/L3) as well as
+    a strong_* variant that excludes near-draw positions (|score| <= 1).
     """
     boards = data["boards"]
     scores = data["scores"]
@@ -76,21 +92,33 @@ def evaluate_value_accuracy(
             _, values = network(batch)
             pred_values[start:end] = values.squeeze(-1).cpu().numpy()
 
+    true_sign = np.sign(scores).astype(np.float32)   # {-1, 0, +1}
     pred_sign = np.sign(pred_values)
-    true_sign = np.sign(scores)
     correct = pred_sign == true_sign
+    sq_err = (pred_values - true_sign) ** 2           # element-wise squared error
+
+    strong_mask = np.abs(scores) > 1
+    unique_levels = sorted(set(levels.tolist()))
 
     results: Dict[str, float] = {}
-    results["sign_accuracy"] = float(correct.mean())
 
-    for lvl in sorted(set(levels.tolist())):
+    # Primary metric: sign MSE
+    results["sign_mse"] = float(sq_err.mean())
+    if strong_mask.sum() > 0:
+        results["strong_sign_mse"] = float(sq_err[strong_mask].mean())
+    for lvl in unique_levels:
+        mask = levels == lvl
+        if mask.sum() > 0:
+            results[f"sign_mse_L{lvl}"] = float(sq_err[mask].mean())
+
+    # Secondary: sign accuracy (for reference)
+    results["sign_accuracy"] = float(correct.mean())
+    if strong_mask.sum() > 0:
+        results["strong_sign_accuracy"] = float(correct[strong_mask].mean())
+    for lvl in unique_levels:
         mask = levels == lvl
         if mask.sum() > 0:
             results[f"sign_accuracy_L{lvl}"] = float(correct[mask].mean())
-
-    strong_mask = np.abs(scores) > 1
-    if strong_mask.sum() > 0:
-        results["strong_sign_accuracy"] = float(correct[strong_mask].mean())
 
     return results
 
@@ -110,14 +138,7 @@ def evaluate_mcts_accuracy(
     Evaluate full MCTS value estimates against optimal scores.
 
     Reconstructs game states from move strings so MCTS can search from them.
-
-    Parameters
-    ----------
-    mcts          : configured MCTS instance (wraps a trained network)
-    data          : dict from load_preprocessed()
-    max_positions : cap on how many positions to evaluate (chosen randomly)
-    level         : if set, evaluate only positions from this difficulty level
-    seed          : random seed for position sampling
+    Reports both sign_mse and sign_accuracy for the MCTS root Q value.
     """
     scores = data["scores"]
     levels = data["levels"]
@@ -142,16 +163,19 @@ def evaluate_mcts_accuracy(
         _, value = mcts.run(game, temperature=0, add_dirichlet=False)
         pred_values[i] = value
 
+    true_sign = np.sign(scores).astype(np.float32)
     pred_sign = np.sign(pred_values)
-    true_sign = np.sign(scores)
     correct = pred_sign == true_sign
+    sq_err = (pred_values - true_sign) ** 2
 
     results: Dict[str, float] = {
+        "mcts_sign_mse": float(sq_err.mean()),
         "mcts_sign_accuracy": float(correct.mean()),
         "n_evaluated": len(scores),
     }
     strong_mask = np.abs(scores) > 1
     if strong_mask.sum() > 0:
+        results["mcts_strong_sign_mse"] = float(sq_err[strong_mask].mean())
         results["mcts_strong_sign_accuracy"] = float(correct[strong_mask].mean())
 
     return results
@@ -162,14 +186,14 @@ def evaluate_mcts_accuracy(
 # ---------------------------------------------------------------------------
 
 def print_evaluation_results(results: Dict[str, float], header: str = "Evaluation"):
-    width = 40
+    width = 44
     print(f"\n{'=' * width}")
     print(f"  {header}")
     print(f"{'=' * width}")
     for key in sorted(results.keys()):
         val = results[key]
         if isinstance(val, float):
-            print(f"  {key:<35s}  {val:.4f}  ({val * 100:.1f}%)")
+            print(f"  {key:<39s}  {val:.4f}")
         else:
-            print(f"  {key:<35s}  {val}")
+            print(f"  {key:<39s}  {val}")
     print(f"{'=' * width}\n")
