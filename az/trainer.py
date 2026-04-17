@@ -3,12 +3,11 @@ import time
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim import SGD
+from torch.optim.lr_scheduler import MultiStepLR
 from tqdm import tqdm
 from typing import Dict, List, Optional, Tuple
 
-from az.optimizer import DirectMLSafeAdam
 from c4.game import Connect4, COLS
 from az.network import AlphaZeroNet
 from az.mcts import MCTS
@@ -31,26 +30,21 @@ class SelfPlayTrainer:
             norm_type=config.network.norm_type,
         ).to(device)
 
-        if config.training.adam_foreach:
-            # Standard Adam (CUDA / CPU)
-            self.optimizer = Adam(
-                self.network.parameters(),
-                lr=config.training.learning_rate,
-                weight_decay=config.training.weight_decay,
-            )
-        else:
-            # DirectML: use lerp_-free Adam (aten::lerp.Scalar_out unsupported)
-            self.optimizer = DirectMLSafeAdam(
-                self.network.parameters(),
-                lr=config.training.learning_rate,
-                weight_decay=config.training.weight_decay,
-            )
+        # SGD with momentum and L2 weight decay — faithful to original AlphaZero paper
+        self.optimizer = SGD(
+            self.network.parameters(),
+            lr=config.training.learning_rate,
+            momentum=config.training.momentum,
+            weight_decay=config.training.weight_decay,
+        )
 
-        # Cosine annealing: LR decays from learning_rate → lr_min over num_iterations
-        self.scheduler = CosineAnnealingLR(
+        # Step-wise LR decay — faithful to original AlphaZero paper
+        n_iters = max(config.training.num_iterations, 1)
+        milestones = [int(f * n_iters) for f in config.training.lr_decay_milestones]
+        self.scheduler = MultiStepLR(
             self.optimizer,
-            T_max=max(config.training.num_iterations, 1),
-            eta_min=config.training.lr_min,
+            milestones=milestones,
+            gamma=config.training.lr_decay_factor,
         )
 
         self.replay_buffer = ReplayBuffer(max_size=config.training.replay_buffer_size)
@@ -163,7 +157,6 @@ class SelfPlayTrainer:
             loss = p_loss + cfg.value_loss_weight * v_loss
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
             self.optimizer.step()
 
             total_p_loss += p_loss.item()

@@ -108,10 +108,8 @@ def main():
         config.training.eval_interval = args.eval_interval
 
     device = get_device()
-    # Two ops are broken on DirectML; fix both automatically.
     if is_directml():
-        config.network.norm_type = "layer"       # BatchNorm2d unsupported
-        config.training.adam_foreach = False     # _foreach_lerp_ unsupported
+        config.network.norm_type = "layer"       # BatchNorm2d unsupported on DirectML
 
     eval_data = load_eval_data(config)
     trainer = SelfPlayTrainer(config, device)
